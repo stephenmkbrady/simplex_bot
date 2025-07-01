@@ -1,0 +1,49 @@
+# SimpleX Bot Configuration Template
+# Copy this file to config.yml and customize for your setup
+
+# Server Configuration - Use your own servers, never official ones
+servers:
+  smp:
+    - "${SMP_SERVER_1}"
+    - "${SMP_SERVER_2:-}"  # Optional backup server
+  xftp:
+    - "${XFTP_SERVER_1}"
+    - "${XFTP_SERVER_2:-}"  # Optional backup server
+
+# Bot Settings
+bot:
+  name: "${BOT_NAME:-SimpleX Bot}"
+  websocket_url: "${WEBSOCKET_URL:-ws://localhost:3030}"
+  auto_accept_contacts: ${AUTO_ACCEPT_CONTACTS:-true}
+  
+# Logging Configuration
+logging:
+  daily_rotation: true
+  message_log_separate: true
+  retention_days: ${LOG_RETENTION_DAYS:-30}
+  log_level: "${LOG_LEVEL:-INFO}"
+  
+# Media Settings  
+media:
+  download_enabled: ${MEDIA_DOWNLOAD_ENABLED:-true}
+  max_file_size: "${MAX_FILE_SIZE:-100MB}"
+  allowed_types: 
+    - "image"
+    - "video" 
+    - "document"
+    - "audio"
+  storage_path: "${MEDIA_STORAGE_PATH:-./media}"
+  
+# Command Settings
+commands:
+  enabled:
+    - "help"
+    - "echo" 
+    - "status"
+  prefix: "!"
+  
+# Security Settings
+security:
+  max_message_length: ${MAX_MESSAGE_LENGTH:-4096}
+  rate_limit_messages: ${RATE_LIMIT_MESSAGES:-10}
+  rate_limit_window: ${RATE_LIMIT_WINDOW:-60}  # seconds

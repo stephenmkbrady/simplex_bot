@@ -1,0 +1,63 @@
+services:
+  simplex-bot:
+    build: .
+    container_name: simplex-bot
+    volumes:
+      - ./bot_profile:/app/profile
+      - ./logs:/app/logs
+      - ./media:/app/media
+      - ./config.yml:/app/config.yml:ro
+      - ./.env:/app/.env:ro
+      - ./config_manager.py:/app/config_manager.py:ro
+      - ./bot.py:/app/bot.py
+      - ./start-services.sh:/app/start-services.sh
+      - ./connect_invitation.sh:/app/connect_invitation.sh:ro
+      - ./check_connection.sh:/app/check_connection.sh:ro
+      - ./websocket_connect.py:/app/websocket_connect.py:ro
+      - ./simplex_utils.py:/app/simplex_utils.py:ro
+      - ./connect.sh:/app/connect.sh:ro
+    ports:
+      - "3030:3030"
+    env_file:
+      - .env
+    environment:
+      # All bot configuration environment variables
+      - SMP_SERVER_1=${SMP_SERVER_1}
+      - SMP_SERVER_2=${SMP_SERVER_2:-}
+      - XFTP_SERVER_1=${XFTP_SERVER_1}
+      - XFTP_SERVER_2=${XFTP_SERVER_2:-}
+      - BOT_NAME=${BOT_NAME:-SimpleX Bot}
+      - WEBSOCKET_URL=${WEBSOCKET_URL:-ws://localhost:3030}
+      - AUTO_ACCEPT_CONTACTS=${AUTO_ACCEPT_CONTACTS:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-30}
+      - MEDIA_DOWNLOAD_ENABLED=${MEDIA_DOWNLOAD_ENABLED:-true}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-100MB}
+      - MEDIA_STORAGE_PATH=${MEDIA_STORAGE_PATH:-./media}
+      - MAX_MESSAGE_LENGTH=${MAX_MESSAGE_LENGTH:-4096}
+      - RATE_LIMIT_MESSAGES=${RATE_LIMIT_MESSAGES:-10}
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    networks:
+      - simplex-net
+    command: ["bash", "/app/start-services.sh"]
+
+  simplex-bot-test:
+    build: .
+    container_name: simplex-bot-test
+    volumes:
+      - ./:/app
+      - ./tests:/app/tests
+    environment:
+      - PYTHONPATH=/app
+    working_dir: /app
+    command: ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
+    networks:
+      - simplex-net
+    profiles:
+      - testing
+
+networks:
+  simplex-net:
+    driver: bridge

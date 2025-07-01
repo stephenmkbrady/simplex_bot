@@ -1,0 +1,24 @@
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install SimpleX Chat CLI
+RUN curl -L https://github.com/simplex-chat/simplex-chat/releases/latest/download/simplex-chat-ubuntu-22_04-x86-64 -o /usr/local/bin/simplex-chat \
+    && chmod +x /usr/local/bin/simplex-chat
+
+# Create app directory
+WORKDIR /app
+
+# Create directories for data
+RUN mkdir -p /app/profile /app/logs
+
+# Expose the WebSocket port
+EXPOSE 3030
+
+# Default command
+CMD ["simplex-chat", "-d", "/app/profile", "-p", "3030"]
