@@ -2,6 +2,7 @@ services:
   simplex-bot:
     build: .
     container_name: simplex-bot
+    user: "1000:1001"
     volumes:
       - ./bot_profile:/app/profile
       - ./logs:/app/logs
@@ -15,6 +16,7 @@ services:
       - ./check_connection.sh:/app/check_connection.sh:ro
       - ./websocket_connect.py:/app/websocket_connect.py:ro
       - ./simplex_utils.py:/app/simplex_utils.py:ro
+      - ./xftp_client.py:/app/xftp_client.py:ro
       - ./connect.sh:/app/connect.sh:ro
     ports:
       - "3030:3030"
@@ -37,6 +39,12 @@ services:
       - MAX_MESSAGE_LENGTH=${MAX_MESSAGE_LENGTH:-4096}
       - RATE_LIMIT_MESSAGES=${RATE_LIMIT_MESSAGES:-10}
       - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - XFTP_CLI_PATH=${XFTP_CLI_PATH:-/usr/local/bin/xftp}
+      - XFTP_TEMP_DIR=${XFTP_TEMP_DIR:-./temp/xftp}
+      - XFTP_TIMEOUT=${XFTP_TIMEOUT:-300}
+      - XFTP_MAX_FILE_SIZE=${XFTP_MAX_FILE_SIZE:-1073741824}
+      - XFTP_RETRY_ATTEMPTS=${XFTP_RETRY_ATTEMPTS:-3}
+      - XFTP_CLEANUP_ON_FAILURE=${XFTP_CLEANUP_ON_FAILURE:-true}
       - PYTHONPATH=/app
     restart: unless-stopped
     networks:

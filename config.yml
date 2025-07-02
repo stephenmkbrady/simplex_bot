@@ -47,3 +47,13 @@ security:
   max_message_length: ${MAX_MESSAGE_LENGTH:-4096}
   rate_limit_messages: ${RATE_LIMIT_MESSAGES:-10}
   rate_limit_window: ${RATE_LIMIT_WINDOW:-60}  # seconds
+
+# XFTP Configuration
+xftp:
+  cli_path: "${XFTP_CLI_PATH:-/usr/local/bin/xftp}"
+  temp_dir: "${XFTP_TEMP_DIR:-./temp/xftp}"
+  timeout: ${XFTP_TIMEOUT:-300}  # Download timeout in seconds
+  max_file_size: ${XFTP_MAX_FILE_SIZE:-1073741824}  # 1GB limit
+  chunk_parallel_limit: ${XFTP_CHUNK_PARALLEL_LIMIT:-5}  # Max parallel chunk downloads
+  retry_attempts: ${XFTP_RETRY_ATTEMPTS:-3}  # Retry failed downloads
+  cleanup_on_failure: ${XFTP_CLEANUP_ON_FAILURE:-true}  # Clean temp files on failure

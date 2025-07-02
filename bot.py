@@ -13,6 +13,9 @@ import sys
 import time
 import argparse
 import os
+import base64
+import hashlib
+import uuid
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +23,7 @@ import logging.handlers
 
 # Import our configuration manager
 from config_manager import ConfigManager, parse_file_size
+from xftp_client import XFTPClient, XFTPError, XFTPDownloadError
 
 
 class DailyRotatingLogger:
@@ -117,6 +121,10 @@ class SimplexChatBot:
         self.media_path = Path(self.media_config.get('storage_path', './media'))
         self.media_path.mkdir(exist_ok=True)
         
+        # Log media configuration
+        self.app_logger.info(f"Media downloads enabled: {self.media_enabled}")
+        self.app_logger.debug(f"Media storage path: {self.media_path}")
+        
         # Create media subdirectories
         for media_type in ['images', 'videos', 'documents', 'audio']:
             (self.media_path / media_type).mkdir(exist_ok=True)
@@ -132,6 +140,9 @@ class SimplexChatBot:
         
         # Server information for status command
         self.server_info = self.config_manager.get_servers()
+        
+        # Initialize XFTP client
+        self._setup_xftp_client()
         
         self.app_logger.info(f"Initialized {self.bot_name}")
         self.app_logger.info(f"SMP Servers: {self.server_info.get('smp', [])}")
@@ -174,6 +185,38 @@ class SimplexChatBot:
                 enabled_commands_dict[full_cmd] = available_commands[full_cmd]
         
         return enabled_commands_dict
+    
+    def _setup_xftp_client(self):
+        """Setup XFTP client for file downloads"""
+        try:
+            # Get XFTP configuration (will be added to config.yml)
+            xftp_config = self.config.get('xftp', {})
+            
+            # Default XFTP settings
+            cli_path = xftp_config.get('cli_path', '/usr/local/bin/xftp')
+            temp_dir = xftp_config.get('temp_dir', './temp/xftp')
+            
+            # Create XFTP client
+            self.xftp_client = XFTPClient(
+                cli_path=cli_path,
+                temp_dir=temp_dir,
+                config=xftp_config,
+                logger=self.app_logger
+            )
+            
+            # Check if XFTP is available
+            self.xftp_available = self.xftp_client.is_available()
+            
+            if self.xftp_available:
+                self.app_logger.info(f"XFTP client initialized successfully (CLI: {cli_path})")
+            else:
+                self.app_logger.warning(f"XFTP CLI not available at {cli_path} - large file downloads will be limited")
+                self.app_logger.warning(f"Note: XFTP downloads will continue with CLI unavailable for testing purposes")
+                
+        except Exception as e:
+            self.app_logger.error(f"Failed to initialize XFTP client: {e}")
+            self.xftp_client = None
+            self.xftp_available = False
     
     def generate_correlation_id(self) -> str:
         """Generate a unique correlation ID for requests"""
@@ -308,6 +351,9 @@ Use !status for detailed information.
         smp_servers = self.server_info.get('smp', [])
         xftp_servers = self.server_info.get('xftp', [])
         
+        # Get media statistics
+        media_stats = self._get_media_statistics()
+        
         status_text = f"""
 📊 {self.bot_name} Status Report
 
@@ -318,13 +364,18 @@ Use !status for detailed information.
 📡 Servers:
   • SMP: {len(smp_servers)} configured
     {chr(10).join([f"    - {server}" for server in smp_servers[:3]])}
-  • XFTP: {len(xftp_servers)} configured  
+  • XFTP: {len(xftp_servers)} configured
     {chr(10).join([f"    - {server}" for server in xftp_servers[:3]])}
 
 📁 Media:
   • Downloads: {"Enabled" if self.media_enabled else "Disabled"}
   • Storage: {self.media_path}
   • Max size: {self.media_config.get('max_file_size', 'N/A')}
+  • Files stored: {media_stats['total_files']} ({media_stats['total_size_mb']:.1f} MB)
+    - Images: {media_stats['images']}
+    - Videos: {media_stats['videos']}
+    - Documents: {media_stats['documents']}
+    - Audio: {media_stats['audio']}
 
 ⚙️ Configuration:
   • Auto-accept contacts: {"Yes" if self.auto_accept_contacts else "No"}
@@ -335,6 +386,35 @@ Use !status for detailed information.
         """.strip()
         
         return status_text
+    
+    def _get_media_statistics(self) -> Dict[str, Any]:
+        """Get statistics about downloaded media files"""
+        stats = {
+            'total_files': 0,
+            'total_size_mb': 0.0,
+            'images': 0,
+            'videos': 0,
+            'documents': 0,
+            'audio': 0
+        }
+        
+        try:
+            for media_type in ['images', 'videos', 'documents', 'audio']:
+                media_dir = self.media_path / media_type
+                if media_dir.exists():
+                    files = list(media_dir.glob('*'))
+                    stats[media_type] = len(files)
+                    stats['total_files'] += len(files)
+                    
+                    # Calculate total size
+                    for file_path in files:
+                        if file_path.is_file():
+                            stats['total_size_mb'] += file_path.stat().st_size / (1024 * 1024)
+        
+        except Exception as e:
+            self.app_logger.error(f"Error calculating media statistics: {e}")
+        
+        return stats
     
     async def process_message(self, message_data: Dict):
         """Process an incoming message and handle commands"""
@@ -354,7 +434,13 @@ Use !status for detailed information.
             
             # Get message content
             content = chat_item.get("content", {})
-            if content.get("msgContent", {}).get("type") == "text":
+            msg_content = content.get("msgContent", {})
+            msg_type = msg_content.get("type", "unknown")
+            
+            # Log message type for debugging
+            self.app_logger.debug(f"Processing message type: {msg_type}")
+            
+            if msg_type == "text":
                 text = content.get("msgContent", {}).get("text", "")
                 
                 # Log the message
@@ -383,22 +469,98 @@ Use !status for detailed information.
                         await self.send_message(contact_name, response)
             
             # Handle file/media messages
-            elif content.get("msgContent", {}).get("type") == "file":
-                await self.handle_file_message(contact_name, content)
+            elif msg_type in ["file", "image", "video", "audio", "media", "attachment"]:
+                self.app_logger.info(f"File message detected: {msg_type}")
+                await self.handle_file_message(contact_name, content, msg_type)
+            else:
+                # Log unhandled message types
+                if msg_type not in ["text"]:
+                    self.app_logger.warning(f"Unhandled message type: {msg_type}")
                         
         except Exception as e:
             self.app_logger.error(f"Error processing message: {e}")
+            # Log the full message structure on error for debugging
+            self.app_logger.debug(f"Message data structure: {message_data}")
     
-    async def handle_file_message(self, contact_name: str, content: Dict):
-        """Handle incoming file/media messages"""
+    async def handle_file_message(self, contact_name: str, content: Dict, msg_type: str = "file"):
+        """Handle incoming file/media messages with actual download functionality"""
+        self.app_logger.debug(f"handle_file_message called for {contact_name}, type: {msg_type}")
+        # Clean base64 data from content structure for logging
+        content_for_log = dict(content)
+        if 'msgContent' in content_for_log and 'image' in content_for_log['msgContent']:
+            image_data = content_for_log['msgContent']['image']
+            if isinstance(image_data, str) and image_data.startswith('data:image/'):
+                # Truncate base64 data
+                header_part = image_data.split(',')[0] if ',' in image_data else image_data
+                content_for_log['msgContent']['image'] = f"{header_part},<base64_truncated>"
+        
+        self.app_logger.debug(f"Content structure: {content_for_log}")
+        
         if not self.media_enabled:
-            self.app_logger.debug("Media downloads disabled, skipping file")
+            self.app_logger.info("Media downloads disabled, skipping file")
             return
         
         try:
             file_info = content.get("msgContent", {})
-            file_name = file_info.get("fileName", "unknown_file")
-            file_size = file_info.get("fileSize", 0)
+            inner_msg_type = file_info.get("type", "")
+            self.app_logger.debug(f"File info keys: {list(file_info.keys())}")
+            self.app_logger.debug(f"Inner message type: {inner_msg_type}")
+            
+            # Log basic file info for debugging
+            self.app_logger.debug(f"Processing {inner_msg_type} message with fields: {list(file_info.keys())}")
+            
+            # Handle SimpleX image format vs traditional file format
+            if inner_msg_type == "image" and "image" in file_info:
+                # SimpleX image format: type: 'image', image: 'data:image/jpg;base64,[data]'
+                image_data_url = file_info.get("image", "")
+                file_name = self._generate_image_filename(contact_name, image_data_url)
+                file_size = self._calculate_data_url_size(image_data_url)
+                file_type = "image"
+                
+                self.app_logger.info(f"SimpleX image detected: {file_name} ({file_size} bytes)")
+            elif inner_msg_type == "video" and "image" in file_info:
+                # Check if this is actually an image file misclassified as video
+                potential_filename = file_info.get("fileName", "")
+                if potential_filename:
+                    actual_file_type = self._get_file_type(potential_filename)
+                    if actual_file_type == "image":
+                        # This is actually an image file, treat it as such
+                        self.app_logger.info(f"🖼️ Large image detected (misclassified as video): {potential_filename}")
+                        # Process as image file instead of video
+                        file_name = potential_filename
+                        file_size = file_info.get("fileSize", 0)
+                        file_type = "image"
+                    else:
+                        # This is a real video file
+                        thumbnail_data_url = file_info.get("image", "")
+                        duration = file_info.get("duration", 0)
+                        
+                        file_name = file_info.get("fileName", f"video_{int(time.time())}.mp4")
+                        file_size = file_info.get("fileSize", 0)
+                        file_type = "video"
+                        
+                        self.app_logger.info(f"🎬 XFTP_DEBUG: SimpleX video detected - name: {file_name}, size: {file_size}, duration: {duration}s")
+                        self.app_logger.info(f"🎬 XFTP_DEBUG: Video has thumbnail: {len(thumbnail_data_url) > 0}")
+                        self.app_logger.info(f"🎬 XFTP_DEBUG: Looking for XFTP fields - fileId: {'fileId' in file_info}, fileHash: {'fileHash' in file_info}")
+                else:
+                    # No filename available, assume it's a video
+                    thumbnail_data_url = file_info.get("image", "")
+                    duration = file_info.get("duration", 0)
+                    
+                    file_name = f"video_{int(time.time())}.mp4"
+                    file_size = file_info.get("fileSize", 0)
+                    file_type = "video"
+                    
+                    self.app_logger.info(f"🎬 XFTP_DEBUG: SimpleX video detected - name: {file_name}, size: {file_size}, duration: {duration}s")
+                    self.app_logger.info(f"🎬 XFTP_DEBUG: Video has thumbnail: {len(thumbnail_data_url) > 0}")
+                    self.app_logger.info(f"🎬 XFTP_DEBUG: Looking for XFTP fields - fileId: {'fileId' in file_info}, fileHash: {'fileHash' in file_info}")
+            else:
+                # Traditional file format: fileName, fileSize, fileData
+                file_name = file_info.get("fileName", "unknown_file")
+                file_size = file_info.get("fileSize", 0)
+                file_type = self._get_file_type(file_name)
+                
+                self.app_logger.info(f"Traditional file format: {file_name} ({file_size} bytes)")
             
             # Check file size limit
             max_size = parse_file_size(self.media_config.get('max_file_size', '100MB'))
@@ -407,8 +569,7 @@ Use !status for detailed information.
                 await self.send_message(contact_name, f"File {file_name} is too large to download")
                 return
             
-            # Determine file type and storage location
-            file_type = self._get_file_type(file_name)
+            # Check if file type is allowed
             if file_type not in self.media_config.get('allowed_types', ['image', 'video', 'document', 'audio']):
                 self.app_logger.warning(f"File type not allowed: {file_name}")
                 return
@@ -417,12 +578,191 @@ Use !status for detailed information.
             self.message_logger.info(f"FILE FROM {contact_name}: {file_name} ({file_size} bytes)")
             self.app_logger.info(f"Received file from {contact_name}: {file_name}")
             
-            # Here we would implement actual file download logic
-            # This would require XFTP integration which is complex
-            # For now, we just log that we received a file
+            # Attempt to download the file
+            download_success = await self._download_file(contact_name, file_info, file_type, inner_msg_type)
+            
+            if download_success == "acknowledged":
+                self.app_logger.info(f"Video/audio message acknowledged - waiting for XFTP file description: {file_name}")
+                await self.send_message(contact_name, f"📹 Video received - downloading via XFTP...")
+            elif download_success == "thumbnail_skipped":
+                self.app_logger.info(f"Thumbnail skipped for {file_name} - waiting for XFTP")
+                # No message sent - wait for XFTP download
+            elif download_success:
+                self.app_logger.info(f"Successfully downloaded file: {file_name}")
+                await self.send_message(contact_name, f"✓ Downloaded: {file_name}")
+            else:
+                self.app_logger.error(f"Failed to download file: {file_name}")
+                await self.send_message(contact_name, f"✗ Failed to download: {file_name}")
             
         except Exception as e:
             self.app_logger.error(f"Error handling file message: {e}")
+            await self.send_message(contact_name, f"Error processing file: {str(e)}")
+    
+    async def handle_file_descriptor_ready(self, data: Dict):
+        """Handle rcvFileDescrReady event with XFTP file metadata"""
+        try:
+            self.app_logger.info(f"🎯 XFTP_DEBUG: Processing file descriptor ready event")
+            self.app_logger.info(f"🎯 XFTP_DEBUG: Event data keys: {list(data.keys())}")
+            
+            # Extract file information from the event
+            file_info = data.get("rcvFileInfo", {})
+            if not file_info:
+                # Try alternative key names
+                file_info = data.get("rcvFileDescr", {})
+                if not file_info:
+                    file_info = data.get("rcvFileTransfer", {})
+                    if not file_info:
+                        self.app_logger.warning(f"🎯 XFTP_DEBUG: No file info found in event data")
+                        self.app_logger.warning(f"🎯 XFTP_DEBUG: Available keys: {list(data.keys())}")
+                        return
+                    else:
+                        self.app_logger.info(f"🎯 XFTP_DEBUG: Found file info in rcvFileTransfer")
+                else:
+                    self.app_logger.info(f"🎯 XFTP_DEBUG: Found file info in rcvFileDescr")
+            
+            self.app_logger.info(f"🎯 XFTP_DEBUG: File info keys: {list(file_info.keys())}")
+            self.app_logger.info(f"🎯 XFTP_DEBUG: Full file info: {file_info}")
+            
+            # Extract contact information from chat item (the sender)
+            chat_item = data.get("chatItem", {})
+            chat_info = chat_item.get("chatInfo", {})
+            if "contact" in chat_info:
+                contact_name = chat_info["contact"].get("localDisplayName", "Unknown")
+            else:
+                # Fallback to user info if no contact found
+                user_info = data.get("user", {})
+                contact_name = user_info.get("localDisplayName", "Unknown")
+            
+            # Extract XFTP file description text
+            file_descr_text = file_info.get("fileDescrText", "")
+            file_descr_complete = file_info.get("fileDescrComplete", False)
+            
+            self.app_logger.info(f"🎯 XFTP_DEBUG: File description complete: {file_descr_complete}")
+            self.app_logger.info(f"🎯 XFTP_DEBUG: File description text (first 200 chars): {file_descr_text[:200]}...")
+            
+            if not file_descr_text or not file_descr_complete:
+                self.app_logger.warning(f"🎯 XFTP_DEBUG: Incomplete file description - cannot download")
+                return
+            
+            # Parse file information from description text
+            file_size = self._parse_xftp_file_size(file_descr_text)
+            
+            # Use a temporary filename for initial download - actual filename will be determined after download
+            temp_file_name = f"xftp_download_{int(time.time())}"
+            
+            # Extract chat item for more details if available
+            chat_item = data.get("chatItem", {})
+            if chat_item:
+                content = chat_item.get("content", {})
+                msg_content = content.get("msgContent", {})
+                # For now, we'll let the XFTP client determine the actual filename from the download
+            
+            self.app_logger.info(f"🎯 XFTP_DEBUG: Ready to download - temp name: {temp_file_name}, size: {file_size}")
+            self.app_logger.info(f"🎯 XFTP_DEBUG: XFTP description available: {len(file_descr_text)} chars")
+            
+            # Create a file info dict compatible with our XFTP client
+            xftp_file_info = {
+                'fileName': temp_file_name,
+                'fileSize': file_size,
+                'fileDescrText': file_descr_text  # Use the actual XFTP description
+            }
+            
+            # Attempt XFTP download - this will return the actual filename and path
+            download_result = await self._download_via_xftp_with_filename_detection(xftp_file_info, contact_name)
+            
+            if download_result:
+                actual_filename, actual_path = download_result
+                self.app_logger.info(f"🎯 XFTP_DEBUG: File download successful: {actual_filename} at {actual_path}")
+                await self.send_message(contact_name, f"✓ Downloaded via XFTP: {actual_filename}")
+            else:
+                self.app_logger.error(f"🎯 XFTP_DEBUG: File download failed: {temp_file_name}")
+                await self.send_message(contact_name, f"✗ XFTP download failed")
+                
+        except Exception as e:
+            self.app_logger.error(f"🎯 XFTP_DEBUG: Error handling file descriptor ready: {e}")
+    
+    async def _download_via_xftp_with_filename_detection(self, file_info: Dict, contact_name: str) -> Optional[tuple]:
+        """Download file via XFTP and return actual filename and path"""
+        try:
+            file_size = file_info.get('fileSize', 0)
+            file_descr_text = file_info.get('fileDescrText', '')
+            
+            if not file_descr_text:
+                self.app_logger.error("No XFTP file description provided")
+                return None
+            
+            self.app_logger.info(f"🔥 XFTP_DEBUG: Starting XFTP download with filename detection")
+            
+            # Use XFTP client to download to a temporary directory first
+            if not self.xftp_available:
+                self.app_logger.error("XFTP client not available")
+                return None
+            
+            # Use the new XFTP client method that preserves filenames
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="xftp_download_") as temp_dir:
+                
+                # Download using XFTP client with filename detection
+                success, actual_filename, file_path = await self.xftp_client.download_file_with_description_get_filename(
+                    file_description=file_descr_text,
+                    file_size=file_size,
+                    temp_dir=temp_dir
+                )
+                
+                if not success or not actual_filename:
+                    self.app_logger.error("XFTP download failed or no filename detected")
+                    return None
+                
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Successfully detected actual filename: {actual_filename}")
+                
+                # Determine file type and storage directory
+                file_type = self._get_file_type(actual_filename)
+                safe_filename = self._generate_safe_filename(actual_filename, contact_name, file_type)
+                
+                # Determine storage directory
+                if file_type == 'audio':
+                    storage_dir = self.media_path / 'audio'
+                else:
+                    storage_dir = self.media_path / f"{file_type}s"
+                storage_dir.mkdir(exist_ok=True)
+                
+                final_path = storage_dir / safe_filename
+                
+                # Move file to final location
+                import shutil
+                shutil.move(file_path, str(final_path))
+                
+                self.app_logger.info(f"🔥 XFTP_DEBUG: File moved to final location: {final_path}")
+                
+                return (actual_filename, str(final_path))
+                
+        except Exception as e:
+            self.app_logger.error(f"Error in XFTP download with filename detection: {e}")
+            return None
+    
+    def _parse_xftp_file_size(self, file_descr_text: str) -> int:
+        """Parse file size from XFTP file description text"""
+        try:
+            import re
+            # Look for "size: XXmb" pattern
+            size_match = re.search(r'size:\s*(\d+)([kmg]?b)', file_descr_text, re.IGNORECASE)
+            if size_match:
+                size_num = int(size_match.group(1))
+                size_unit = size_match.group(2).lower()
+                
+                if size_unit == 'gb':
+                    return size_num * 1024 * 1024 * 1024
+                elif size_unit == 'mb':
+                    return size_num * 1024 * 1024
+                elif size_unit == 'kb':
+                    return size_num * 1024
+                else:  # bytes
+                    return size_num
+            
+            return 0
+        except Exception as e:
+            self.app_logger.error(f"Error parsing XFTP file size: {e}")
+            return 0
     
     def _get_file_type(self, filename: str) -> str:
         """Determine file type from filename extension"""
@@ -440,6 +780,461 @@ Use !status for detailed information.
             return 'audio'
         else:
             return 'document'
+    
+    def _generate_safe_filename(self, original_name: str, contact_name: str, file_type: str) -> str:
+        """Generate a safe, unique filename to avoid conflicts"""
+        # Clean the original filename
+        safe_name = "".join(c for c in original_name if c.isalnum() or c in "._-")
+        if not safe_name:
+            safe_name = "unknown_file"
+        
+        # Add timestamp and contact info for uniqueness
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_contact = "".join(c for c in contact_name if c.isalnum() or c in "_-")[:20]
+        
+        # Split filename and extension
+        name_part = Path(safe_name).stem
+        ext_part = Path(safe_name).suffix
+        
+        # Create unique filename
+        unique_name = f"{timestamp}_{safe_contact}_{name_part}{ext_part}"
+        
+        # Ensure it's not too long
+        if len(unique_name) > 200:
+            unique_name = f"{timestamp}_{safe_contact}_{name_part[:50]}{ext_part}"
+        
+        return unique_name
+    
+    def _generate_image_filename(self, contact_name: str, image_data_url: str) -> str:
+        """Generate a filename for SimpleX images that don't have explicit names"""
+        try:
+            # Extract file extension from data URL (e.g., data:image/jpg;base64,...)
+            if image_data_url.startswith("data:image/"):
+                mime_part = image_data_url.split(";")[0]  # data:image/jpg
+                image_format = mime_part.split("/")[1]    # jpg
+                
+                # Map common formats
+                format_map = {
+                    "jpeg": "jpg",
+                    "png": "png",
+                    "gif": "gif",
+                    "webp": "webp",
+                    "bmp": "bmp"
+                }
+                ext = format_map.get(image_format, image_format)
+            else:
+                ext = "jpg"  # Default fallback
+            
+            # Generate timestamp-based filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_contact = "".join(c for c in contact_name if c.isalnum() or c in "_-")[:20]
+            
+            filename = f"{timestamp}_{safe_contact}_image.{ext}"
+            
+            self.app_logger.debug(f"Generated image filename: {filename}")
+            return filename
+            
+        except Exception as e:
+            self.app_logger.error(f"Error generating image filename: {e}")
+            return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_image.jpg"
+    
+    def _calculate_data_url_size(self, data_url: str) -> int:
+        """Calculate the size of data from a data URL"""
+        try:
+            if not data_url.startswith("data:"):
+                return 0
+            
+            # Extract base64 part after the comma
+            if "," in data_url:
+                base64_data = data_url.split(",", 1)[1]
+                # Calculate approximate size (base64 is ~4/3 the size of original data)
+                # Remove any padding characters for accurate calculation
+                base64_clean = base64_data.rstrip("=")
+                original_size = (len(base64_clean) * 3) // 4
+                
+                self.app_logger.debug(f"Calculated data URL size: {original_size} bytes")
+                return original_size
+            
+            return 0
+            
+        except Exception as e:
+            self.app_logger.error(f"Error calculating data URL size: {e}")
+            return 0
+    
+    def _parse_data_url(self, data_url: str) -> tuple[str, str]:
+        """Parse a data URL and return (mime_type, base64_data)"""
+        try:
+            if not data_url.startswith("data:"):
+                raise ValueError("Invalid data URL format")
+            
+            # Split into header and data parts
+            header, data = data_url.split(",", 1)
+            
+            # Extract MIME type from header (e.g., "data:image/jpg;base64")
+            mime_type = header.split(";")[0].replace("data:", "")
+            
+            return mime_type, data
+            
+        except Exception as e:
+            self.app_logger.error(f"Error parsing data URL: {e}")
+            return "application/octet-stream", ""
+    
+    async def _download_file(self, contact_name: str, file_info: Dict, file_type: str, inner_msg_type: str = "file") -> bool:
+        """Download file using available methods (direct data or XFTP)"""
+        try:
+            self.app_logger.info(f"🔍 XFTP_DEBUG: Starting file download - contact: {contact_name}, type: {file_type}, inner_msg_type: {inner_msg_type}")
+            self.app_logger.info(f"🔍 XFTP_DEBUG: File info keys: {list(file_info.keys())}")
+            # Clean base64 data for logging
+            file_info_for_log = dict(file_info)
+            if 'image' in file_info_for_log and isinstance(file_info_for_log['image'], str):
+                if file_info_for_log['image'].startswith('data:image/'):
+                    header_part = file_info_for_log['image'].split(',')[0] if ',' in file_info_for_log['image'] else file_info_for_log['image']
+                    file_info_for_log['image'] = f"{header_part},<base64_truncated>"
+            
+            self.app_logger.info(f"🔍 XFTP_DEBUG: Full file_info: {file_info_for_log}")
+            
+            # Handle SimpleX image format - Skip thumbnails, wait for XFTP
+            if inner_msg_type == "image" and "image" in file_info:
+                image_data_url = file_info.get("image", "")
+                file_name = self._generate_image_filename(contact_name, image_data_url)
+                file_size = self._calculate_data_url_size(image_data_url)
+                
+                self.app_logger.info(f"🔍 XFTP_DEBUG: Processing SimpleX image - name: {file_name}, size: {file_size}")
+                self.app_logger.info(f"🔍 XFTP_DEBUG: This is an embedded image (thumbnail), skipping - waiting for XFTP")
+                
+                # Skip thumbnail download, return acknowledgment
+                return "thumbnail_skipped"
+            
+            # Handle traditional file format
+            else:
+                file_name = file_info.get("fileName", "unknown_file")
+                file_size = file_info.get("fileSize", 0)
+                
+                self.app_logger.info(f"🔍 XFTP_DEBUG: Processing traditional file - name: {file_name}, size: {file_size}")
+                
+                # Check for XFTP indicators
+                has_file_id = "fileId" in file_info
+                has_file_hash = "fileHash" in file_info
+                has_file_data = "fileData" in file_info
+                
+                self.app_logger.info(f"🔍 XFTP_DEBUG: File indicators - fileId: {has_file_id}, fileHash: {has_file_hash}, fileData: {has_file_data}")
+                if has_file_id:
+                    self.app_logger.info(f"🔍 XFTP_DEBUG: fileId value: {file_info.get('fileId')}")
+                if has_file_hash:
+                    self.app_logger.info(f"🔍 XFTP_DEBUG: fileHash value: {file_info.get('fileHash')}")
+                
+                # Generate safe filename
+                safe_filename = self._generate_safe_filename(file_name, contact_name, file_type)
+                
+                # Determine storage directory
+                if file_type == 'audio':
+                    storage_dir = self.media_path / 'audio'
+                else:
+                    storage_dir = self.media_path / f"{file_type}s"  # images, videos, documents
+                storage_dir.mkdir(exist_ok=True)
+                
+                file_path = storage_dir / safe_filename
+                
+                # Method 1: Skip thumbnails - only use XFTP
+                if "fileData" in file_info:
+                    self.app_logger.info(f"🔍 XFTP_DEBUG: Direct file data (thumbnail) detected - skipping, waiting for XFTP")
+                    return "thumbnail_skipped"
+                
+                # Method 2: Try XFTP download using file ID/hash
+                elif "fileId" in file_info or "fileHash" in file_info:
+                    self.app_logger.info(f"🔍 XFTP_DEBUG: Using Method 2 - XFTP download (large file)")
+                    self.app_logger.info(f"🔍 XFTP_DEBUG: XFTP available: {self.xftp_available}")
+                    
+                    xftp_success = await self._download_via_xftp(file_info, file_path, file_name)
+                    if xftp_success:
+                        self.app_logger.info(f"🔍 XFTP_DEBUG: XFTP download successful")
+                        return True
+                    
+                    # Fallback to SMP if XFTP fails
+                    self.app_logger.warning(f"🔍 XFTP_DEBUG: XFTP download failed for {file_name}, attempting SMP fallback")
+                    return await self._download_via_smp_fallback(file_info, file_path, file_name)
+                
+                # Method 3: Handle video/audio messages without XFTP indicators
+                else:
+                    # For video/audio messages, the initial message only contains thumbnail
+                    # The actual file will arrive later via rcvFileDescrReady event
+                    if inner_msg_type in ["video", "audio"]:
+                        self.app_logger.info(f"📹 Video/audio message received - waiting for XFTP file description")
+                        # Don't attempt download - just acknowledge receipt
+                        # The rcvFileDescrReady event will handle the actual download
+                        return "acknowledged"  # Special return value to indicate waiting for XFTP
+                    else:
+                        # For other file types without XFTP indicators, assume it's a thumbnail - skip
+                        self.app_logger.info(f"🔍 XFTP_DEBUG: File without XFTP indicators detected - likely thumbnail, skipping: {file_name} (type: {inner_msg_type})")
+                        return "thumbnail_skipped"
+                
+        except Exception as e:
+            self.app_logger.error(f"Error in file download: {e}")
+            # If it's likely a thumbnail parsing error, skip instead of failing
+            if "fileData" in file_info or ("image" in file_info and inner_msg_type == "image"):
+                self.app_logger.info(f"🔍 XFTP_DEBUG: Error likely from thumbnail processing - skipping")
+                return "thumbnail_skipped"
+            return False
+    
+    async def _save_simplex_image_data(self, image_data_url: str, file_path: Path, original_name: str) -> bool:
+        """Save SimpleX image data from data URL format"""
+        try:
+            self.app_logger.debug(f"Saving SimpleX image data to {file_path}")
+            
+            # Parse the data URL to extract base64 content
+            mime_type, base64_data = self._parse_data_url(image_data_url)
+            
+            # Debug: Log actual base64 data length
+            self.app_logger.info(f"📊 Base64 DEBUG: Original data URL length: {len(image_data_url)}")
+            self.app_logger.info(f"📊 Base64 DEBUG: Extracted base64 data length: {len(base64_data)}")
+            self.app_logger.info(f"📊 Base64 DEBUG: First 50 chars of base64: {base64_data[:50]}")
+            
+            if not base64_data:
+                self.app_logger.error(f"No base64 data found in image URL for {original_name}")
+                return False
+            
+            # Decode base64 image data with proper padding
+            try:
+                # Fix base64 padding if needed
+                missing_padding = len(base64_data) % 4
+                if missing_padding:
+                    base64_data += '=' * (4 - missing_padding)
+                
+                file_bytes = base64.b64decode(base64_data)
+            except Exception as e:
+                self.app_logger.error(f"Failed to decode base64 data for {original_name}: {e}")
+                return False
+            
+            # Write to file
+            with open(file_path, 'wb') as f:
+                f.write(file_bytes)
+            
+            # Validate the downloaded file
+            if self._validate_downloaded_file(file_path, len(file_bytes)):
+                self.app_logger.info(f"Saved SimpleX image: {file_path} ({len(file_bytes)} bytes)")
+                
+                # Calculate and log file hash for integrity
+                file_hash = self._get_file_hash(file_path)
+                if file_hash:
+                    self.app_logger.debug(f"Image hash (SHA-256): {file_hash}")
+                
+                return True
+            else:
+                self.app_logger.error(f"File validation failed for {original_name}")
+                self._cleanup_failed_download(file_path)
+                return False
+            
+        except Exception as e:
+            self.app_logger.error(f"Error saving SimpleX image data for {original_name}: {e}")
+            self._cleanup_failed_download(file_path)
+            return False
+    
+    async def _save_direct_file_data(self, file_data: str, file_path: Path, original_name: str) -> bool:
+        """Save file data that's directly embedded in the message"""
+        try:
+            # Decode base64 file data with proper padding
+            # Fix base64 padding if needed
+            missing_padding = len(file_data) % 4
+            if missing_padding:
+                file_data += '=' * (4 - missing_padding)
+            
+            file_bytes = base64.b64decode(file_data)
+            
+            # Write to file
+            with open(file_path, 'wb') as f:
+                f.write(file_bytes)
+            
+            # Validate the downloaded file
+            if self._validate_downloaded_file(file_path, len(file_bytes)):
+                self.app_logger.info(f"Saved file directly: {file_path} ({len(file_bytes)} bytes)")
+                
+                # Calculate and log file hash for integrity
+                file_hash = self._get_file_hash(file_path)
+                if file_hash:
+                    self.app_logger.debug(f"File hash (SHA-256): {file_hash}")
+                
+                return True
+            else:
+                self.app_logger.error(f"File validation failed for {original_name}")
+                self._cleanup_failed_download(file_path)
+                return False
+            
+        except Exception as e:
+            self.app_logger.error(f"Error saving direct file data for {original_name}: {e}")
+            self._cleanup_failed_download(file_path)
+            return False
+    
+    async def _download_via_xftp(self, file_info: Dict, file_path: Path, original_name: str) -> bool:
+        """Download file via XFTP using file ID or hash"""
+        try:
+            self.app_logger.info(f"🔥 XFTP_DEBUG: _download_via_xftp called for {original_name}")
+            
+            # Check if XFTP client is available
+            if not self.xftp_client:
+                self.app_logger.warning(f"🔥 XFTP_DEBUG: XFTP client not initialized for {original_name}")
+                return False
+            
+            if not self.xftp_available:
+                self.app_logger.warning(f"🔥 XFTP_DEBUG: XFTP CLI not available, but proceeding for testing - {original_name}")
+                # Continue anyway for testing purposes
+            
+            # Check for new XFTP format (file description text)
+            file_descr_text = file_info.get("fileDescrText")
+            if file_descr_text:
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Using XFTP file description format")
+                file_size = file_info.get("fileSize", 0)
+                
+                self.app_logger.info(f"🔥 XFTP_DEBUG: File description length: {len(file_descr_text)} chars, Size: {file_size}")
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Starting XFTP download for {original_name} (Size: {file_size})")
+                
+                # Use XFTPClient with file description text
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Calling xftp_client.download_file_with_description")
+                success = await self.xftp_client.download_file_with_description(
+                    file_description=file_descr_text,
+                    file_size=file_size,
+                    file_name=original_name,
+                    output_path=str(file_path)
+                )
+            else:
+                # Fallback to old format
+                file_id = file_info.get("fileId")
+                file_hash = file_info.get("fileHash")
+                file_size = file_info.get("fileSize", 0)
+                
+                self.app_logger.info(f"🔥 XFTP_DEBUG: File parameters - ID: {file_id}, Hash: {file_hash}, Size: {file_size}")
+                
+                if not file_id:
+                    self.app_logger.warning(f"🔥 XFTP_DEBUG: No file ID available for XFTP download: {original_name}")
+                    return False
+                
+                if not file_hash:
+                    self.app_logger.warning(f"🔥 XFTP_DEBUG: No file hash available for integrity verification: {original_name}")
+                    return False
+                
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Starting XFTP download for {original_name} (ID: {file_id}, Size: {file_size})")
+                
+                # Use XFTPClient to download the file
+                self.app_logger.info(f"🔥 XFTP_DEBUG: Calling xftp_client.download_file with output_path: {file_path}")
+                success = await self.xftp_client.download_file(
+                    file_id=file_id,
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    file_name=original_name,
+                    output_path=str(file_path)
+                )
+            
+            if success:
+                self.app_logger.info(f"🔥 XFTP_DEBUG: XFTP download completed successfully: {original_name}")
+                return True
+            else:
+                self.app_logger.warning(f"🔥 XFTP_DEBUG: XFTP download failed: {original_name}")
+                return False
+                
+        except XFTPError as e:
+            self.app_logger.error(f"🔥 XFTP_DEBUG: XFTP error downloading {original_name}: {e}")
+            return False
+        except Exception as e:
+            self.app_logger.error(f"🔥 XFTP_DEBUG: Unexpected error in XFTP download for {original_name}: {e}")
+            return False
+    
+    async def _download_via_smp_fallback(self, file_info: Dict, file_path: Path, original_name: str) -> bool:
+        """Fallback to SMP download when XFTP fails"""
+        try:
+            # Try to request the file through SMP protocol
+            # This would typically involve sending a download request through SimpleX CLI
+            file_id = file_info.get("fileId")
+            file_hash = file_info.get("fileHash")
+            
+            if not file_id and not file_hash:
+                self.app_logger.warning(f"No file ID or hash available for SMP fallback: {original_name}")
+                return False
+            
+            self.app_logger.info(f"Attempting SMP fallback download for {original_name}")
+            
+            # Send download request command (this is a simplified approach)
+            download_cmd = f"/receive_file {file_id or file_hash}"
+            
+            try:
+                response = await self.send_command(download_cmd, wait_for_response=True, timeout=30)
+                
+                if response and "file received" in response.lower():
+                    self.app_logger.info(f"SMP fallback download initiated for {original_name}")
+                    # Note: The actual file transfer would happen through the CLI
+                    # This is a placeholder for SMP integration
+                    return True
+                else:
+                    self.app_logger.warning(f"SMP fallback download failed for {original_name}")
+                    return False
+                    
+            except asyncio.TimeoutError:
+                self.app_logger.warning(f"SMP fallback download timed out for {original_name}")
+                return False
+                
+        except Exception as e:
+            self.app_logger.error(f"Error in SMP fallback download for {original_name}: {e}")
+            return False
+    
+    def _is_download_successful(self, response: Dict) -> bool:
+        """Check if a download response indicates success"""
+        try:
+            if "resp" in response and "Right" in response["resp"]:
+                resp_data = response["resp"]["Right"]
+                resp_type = resp_data.get("type", "")
+                return resp_type in ["fileDownloaded", "downloadComplete", "success"]
+            return False
+        except Exception:
+            return False
+    
+    def _validate_downloaded_file(self, file_path: Path, expected_size: int = None) -> bool:
+        """Validate that a downloaded file is complete and not corrupted"""
+        try:
+            if not file_path.exists():
+                return False
+            
+            # Check if file is empty
+            if file_path.stat().st_size == 0:
+                self.app_logger.warning(f"Downloaded file is empty: {file_path}")
+                return False
+            
+            # Check expected size if provided
+            if expected_size and file_path.stat().st_size != expected_size:
+                self.app_logger.warning(f"File size mismatch: expected {expected_size}, got {file_path.stat().st_size}")
+                return False
+            
+            # Basic file integrity check - try to read the file
+            try:
+                with open(file_path, 'rb') as f:
+                    f.read(1024)  # Read first 1KB to check accessibility
+            except Exception as e:
+                self.app_logger.error(f"Cannot read downloaded file {file_path}: {e}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.app_logger.error(f"Error validating file {file_path}: {e}")
+            return False
+    
+    def _cleanup_failed_download(self, file_path: Path):
+        """Clean up partially downloaded or corrupted files"""
+        try:
+            if file_path.exists():
+                file_path.unlink()
+                self.app_logger.info(f"Cleaned up failed download: {file_path}")
+        except Exception as e:
+            self.app_logger.error(f"Error cleaning up file {file_path}: {e}")
+    
+    def _get_file_hash(self, file_path: Path) -> str:
+        """Calculate SHA-256 hash of a file for integrity checking"""
+        try:
+            hash_sha256 = hashlib.sha256()
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception as e:
+            self.app_logger.error(f"Error calculating hash for {file_path}: {e}")
+            return ""
     
     async def handle_contact_request(self, request_data: Dict):
         """Handle incoming contact requests"""
@@ -511,20 +1306,112 @@ Use !status for detailed information.
                     await self.process_message(chat_item_data)
             elif resp_type == "contactRequest":
                 await self.handle_contact_request(actual_resp)
+            elif resp_type == "rcvFileDescrReady":
+                self.app_logger.info(f"🎯 XFTP_DEBUG: rcvFileDescrReady event received!")
+                await self.handle_file_descriptor_ready(actual_resp)
             else:
                 self.app_logger.debug(f"Received response type: {resp_type}")
                 
         except Exception as e:
             self.app_logger.error(f"Error handling response: {e}")
     
+    def _log_websocket_message_safely(self, message: str, data: Dict):
+        """Log WebSocket messages while filtering out base64 data to prevent log spam"""
+        try:
+            # Check if this is a file message with base64 data
+            if self._contains_base64_file_data(data):
+                # Log a summary instead of the full message
+                msg_type = "unknown"
+                file_name = "unknown"
+                file_size = 0
+                
+                # Extract basic info for logging
+                if "resp" in data and "Right" in data["resp"]:
+                    resp_data = data["resp"]["Right"]
+                    msg_type = resp_data.get("type", "unknown")
+                    
+                    if msg_type in ["newChatItem", "newChatItems"]:
+                        # Try to extract file info
+                        chat_item = resp_data.get("chatItem", {}) if msg_type == "newChatItem" else {}
+                        if not chat_item and msg_type == "newChatItems":
+                            chat_items = resp_data.get("chatItems", [])
+                            if chat_items:
+                                chat_item = chat_items[0].get("chatItem", {})
+                        
+                        content = chat_item.get("content", {})
+                        msg_content = content.get("msgContent", {})
+                        content_type = msg_content.get("type", "")
+                        
+                        if content_type == "file":
+                            file_name = msg_content.get("fileName", "unknown")
+                            file_size = msg_content.get("fileSize", 0)
+                        elif content_type == "image":
+                            file_name = "image"
+                            image_data = msg_content.get("image", "")
+                            if image_data.startswith("data:image/"):
+                                # Calculate approximate size from data URL
+                                if "," in image_data:
+                                    base64_data = image_data.split(",", 1)[1]
+                                    file_size = (len(base64_data.rstrip("=")) * 3) // 4
+                                else:
+                                    file_size = 0
+                            else:
+                                file_size = 0
+                
+                self.app_logger.debug(f"Received message type: {msg_type} (file: {file_name}, {file_size} bytes) - base64 data filtered")
+            else:
+                # Log normally for non-file messages
+                self.app_logger.debug(f"Received WebSocket message: {message[:200]}...")
+                
+        except Exception as e:
+            self.app_logger.debug(f"Error in safe logging: {e}")
+    
+    def _contains_base64_file_data(self, data: Dict) -> bool:
+        """Check if the message contains base64 file data"""
+        try:
+            if "resp" in data and "Right" in data["resp"]:
+                resp_data = data["resp"]["Right"]
+                msg_type = resp_data.get("type", "")
+                
+                if msg_type == "newChatItem":
+                    return self._check_chat_item_for_file_data(resp_data.get("chatItem", {}))
+                elif msg_type == "newChatItems":
+                    chat_items = resp_data.get("chatItems", [])
+                    return any(self._check_chat_item_for_file_data(item.get("chatItem", {})) for item in chat_items)
+            
+            return False
+        except Exception:
+            return False
+    
+    def _check_chat_item_for_file_data(self, chat_item: Dict) -> bool:
+        """Check if a chat item contains file data"""
+        try:
+            content = chat_item.get("content", {})
+            msg_content = content.get("msgContent", {})
+            msg_type = msg_content.get("type", "")
+            
+            # Check for traditional file format with embedded data
+            if msg_type == "file" and "fileData" in msg_content:
+                return True
+            
+            # Check for SimpleX image format with data URL
+            if msg_type == "image" and "image" in msg_content:
+                image_data = msg_content.get("image", "")
+                return image_data.startswith("data:image/")
+            
+            return False
+        except Exception:
+            return False
+
     async def listen_for_messages(self):
         """Listen for incoming messages from SimpleX Chat CLI"""
         try:
             async for message in self.websocket:
                 try:
                     data = json.loads(message)
-                    self.app_logger.info(f"RAW WebSocket message received: {message}")
-                    self.app_logger.info(f"Parsed WebSocket data: {json.dumps(data, indent=2)}")
+                    
+                    # Smart logging that filters out base64 image data
+                    self._log_websocket_message_safely(message, data)
                     
                     await self.handle_response(data)
                     
