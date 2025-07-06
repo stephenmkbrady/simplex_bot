@@ -7,6 +7,7 @@ services:
       - ./bot_profile:/app/profile
       - ./logs:/app/logs
       - ./media:/app/media
+      - ./plugins:/app/plugins
       - ./config.yml:/app/config.yml:ro
       - ./.env:/app/.env:ro
       - ./config_manager.py:/app/config_manager.py:ro

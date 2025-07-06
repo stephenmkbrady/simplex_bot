@@ -21,6 +21,10 @@ from message_handler import MessageHandler
 from websocket_manager import WebSocketManager
 from xftp_client import XFTPClient
 
+# Import universal plugin system
+from plugins.universal_plugin_manager import UniversalPluginManager
+from plugins.simplex_adapter import SimplexBotAdapter
+
 # Constants
 DEFAULT_MAX_MESSAGE_LENGTH = 4096
 DEFAULT_RATE_LIMIT_MESSAGES = 10
@@ -160,11 +164,13 @@ class CommandRegistry:
         text = text.strip()
         if text.startswith('!'):
             command_part = text[1:].split()[0] if text[1:].split() else ""
-            return command_part in self.commands
+            # Check both legacy commands and assume plugin commands exist
+            # Plugin commands will be handled in execute_command
+            return command_part in self.commands or len(command_part) > 0
         
         return False
     
-    async def execute_command(self, text: str, contact_name: str) -> Optional[str]:
+    async def execute_command(self, text: str, contact_name: str, plugin_manager=None) -> Optional[str]:
         """Execute a command and return the response"""
         if not self.is_command(text):
             return None
@@ -175,7 +181,29 @@ class CommandRegistry:
         command_name = parts[0] if parts else ""
         args = parts[1:] if len(parts) > 1 else []
         
-        # Get command handler
+        # First try plugin manager if available
+        if plugin_manager:
+            try:
+                from plugins.universal_plugin_base import CommandContext, BotPlatform
+                context = CommandContext(
+                    command=command_name,
+                    args=args,
+                    args_raw=' '.join(args),
+                    user_id=contact_name,
+                    chat_id=contact_name,
+                    user_display_name=contact_name,
+                    platform=BotPlatform.SIMPLEX,
+                    raw_message={}
+                )
+                
+                plugin_result = await plugin_manager.handle_command(context)
+                if plugin_result is not None:
+                    return plugin_result
+            except Exception as e:
+                self.logger.error(f"Error in plugin manager: {e}")
+                # Fall through to legacy commands
+        
+        # Fall back to legacy command registry
         handler = self.get_command(command_name)
         if not handler:
             return f"Unknown command: {command_name}"
@@ -235,6 +263,9 @@ class SimplexChatBot:
         # Initialize components with dependency injection
         self._initialize_components()
         
+        # Initialize plugin system
+        self._initialize_plugin_system()
+        
         # Bot state
         self.running = False
         self.contacts = {}
@@ -284,11 +315,30 @@ class SimplexChatBot:
             message_logger=self.message_logger
         )
         
+        # Pass bot instance to message handler for plugin access
+        self.message_handler._bot_instance = self
+        
         # Register WebSocket message handlers
         self.websocket_manager.register_message_handler('newChatItem', self._handle_new_chat_item)
         self.websocket_manager.register_message_handler('newChatItems', self._handle_new_chat_items)
         self.websocket_manager.register_message_handler('contactRequest', self._handle_contact_request)
         self.websocket_manager.register_message_handler('contactConnected', self._handle_contact_connected)
+    
+    def _initialize_plugin_system(self):
+        """Initialize the universal plugin system"""
+        try:
+            # Create plugin manager
+            self.plugin_manager = UniversalPluginManager("plugins/external")
+            
+            # Create SimpleX adapter
+            self.plugin_adapter = SimplexBotAdapter(self)
+            
+            self.logger.info("Plugin system initialized successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize plugin system: {e}")
+            self.plugin_manager = None
+            self.plugin_adapter = None
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -305,6 +355,15 @@ class SimplexChatBot:
             return False
         
         self.running = True
+        
+        # Load plugins after successful connection
+        if self.plugin_manager and self.plugin_adapter:
+            try:
+                await self.plugin_manager.discover_and_load_plugins(self.plugin_adapter)
+                self.logger.info("Plugins loaded successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to load plugins: {e}")
+        
         self.logger.info("SimplexChatBot started successfully")
         
         # Start listening for messages
@@ -316,6 +375,14 @@ class SimplexChatBot:
         """Stop the bot"""
         self.logger.info("Stopping SimplexChatBot...")
         self.running = False
+        
+        # Cleanup plugin system
+        if hasattr(self, 'plugin_manager') and self.plugin_manager:
+            try:
+                await self.plugin_manager.cleanup()
+                self.logger.info("Plugin system cleaned up")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up plugin system: {e}")
         
         # Disconnect WebSocket
         await self.websocket_manager.disconnect()

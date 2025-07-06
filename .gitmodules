@@ -1,0 +1,3 @@
+[submodule "plugins/external"]
+	path = plugins/external
+	url = https://github.com/stephenmkbrady/universal-bot-plugins.git

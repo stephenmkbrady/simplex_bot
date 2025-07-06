@@ -82,7 +82,12 @@ class MessageHandler:
     async def _process_command(self, contact_name: str, text: str) -> None:
         """Process a command message"""
         try:
-            result = await self.command_registry.execute_command(text, contact_name)
+            # Try to get plugin manager from the bot instance
+            plugin_manager = None
+            if hasattr(self, '_bot_instance'):
+                plugin_manager = getattr(self._bot_instance, 'plugin_manager', None)
+            
+            result = await self.command_registry.execute_command(text, contact_name, plugin_manager)
             if result:
                 await self.send_message_callback(contact_name, result)
                 self.message_logger.info(f"TO {contact_name}: {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
