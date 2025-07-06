@@ -13,6 +13,10 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Constants
+DEFAULT_RETENTION_DAYS = 30
+BYTES_PER_KB = 1024
+
 
 class ConfigManager:
     """Manages bot configuration from YAML files with environment variable substitution"""
@@ -120,7 +124,7 @@ class ConfigManager:
             'logging': {
                 'daily_rotation': True,
                 'message_log_separate': True,
-                'retention_days': 30,
+                'retention_days': DEFAULT_RETENTION_DAYS,
                 'log_level': 'INFO'
             },
             'media': {
@@ -241,10 +245,10 @@ def parse_file_size(size_str: str) -> int:
         size_str = size_str[:-1]
     
     multipliers = {
-        'K': 1024,
-        'M': 1024 ** 2,
-        'G': 1024 ** 3,
-        'T': 1024 ** 4
+        'K': BYTES_PER_KB,
+        'M': BYTES_PER_KB ** 2,
+        'G': BYTES_PER_KB ** 3,
+        'T': BYTES_PER_KB ** 4
     }
     
     if size_str[-1] in multipliers:

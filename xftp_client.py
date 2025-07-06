@@ -14,34 +14,17 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, AsyncIterator
+from typing import Dict, List, Optional, Tuple
 import shutil
 
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ChunkInfo:
-    """Information about a file chunk"""
-    chunk_id: str
-    chunk_size: int
-    chunk_hash: str
-    relay_url: str
-    access_key: str
-
-
-@dataclass
-class XFTPFileInfo:
-    """Metadata extracted from XFTP file description"""
-    file_size: int
-    chunk_count: int
-    file_hash: str
-    encryption_key: str
-    chunk_info: List[ChunkInfo]
-    relay_urls: List[str]
-    created_at: Optional[str] = None
-    expires_at: Optional[str] = None
+# Constants
+DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
+DEFAULT_RETRY_ATTEMPTS = 3
+HASH_CHUNK_SIZE = 4096
 
 
 @dataclass
@@ -52,17 +35,6 @@ class CLIResult:
     error: str
     return_code: int
     execution_time: float
-
-
-@dataclass
-class ProgressUpdate:
-    """Progress update for file download"""
-    bytes_downloaded: int
-    total_bytes: int
-    chunks_completed: int
-    total_chunks: int
-    percentage: float
-    speed_mbps: float
 
 
 class XFTPError(Exception):
@@ -88,7 +60,7 @@ class XFTPTimeoutError(XFTPError):
 class XFTPCLIInterface:
     """Manages XFTP CLI subprocess operations"""
     
-    def __init__(self, cli_path: str, timeout: int = 300):
+    def __init__(self, cli_path: str, timeout: int = DEFAULT_TIMEOUT_SECONDS):
         self.cli_path = cli_path
         self.timeout = timeout
         
@@ -191,7 +163,7 @@ class SecurityValidator:
             return False
     
     @staticmethod
-    def validate_file_size(size: int, max_size: int = 1024 * 1024 * 1024) -> bool:
+    def validate_file_size(size: int, max_size: int = DEFAULT_MAX_FILE_SIZE) -> bool:
         """Enforce file size limits (default 1GB)"""
         return 0 < size <= max_size
     
@@ -246,10 +218,10 @@ class XFTPClient:
         )
         
         # Configuration
-        max_file_size_raw = config.get('max_file_size', 1024 * 1024 * 1024)
+        max_file_size_raw = config.get('max_file_size', DEFAULT_MAX_FILE_SIZE)
         self.max_file_size = int(max_file_size_raw) if isinstance(max_file_size_raw, str) else max_file_size_raw
         
-        retry_attempts_raw = config.get('retry_attempts', 3)
+        retry_attempts_raw = config.get('retry_attempts', DEFAULT_RETRY_ATTEMPTS)
         self.retry_attempts = int(retry_attempts_raw) if isinstance(retry_attempts_raw, str) else retry_attempts_raw
         
         cleanup_raw = config.get('cleanup_on_failure', True)
@@ -605,7 +577,7 @@ class XFTPClient:
             # Calculate SHA-512 hash
             sha512_hash = hashlib.sha512()
             with open(file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b''):
+                for chunk in iter(lambda: f.read(HASH_CHUNK_SIZE), b''):
                     sha512_hash.update(chunk)
             
             calculated_hash = sha512_hash.hexdigest()
