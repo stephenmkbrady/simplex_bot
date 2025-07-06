@@ -4,6 +4,7 @@ A Python bot for SimpleX Chat with Docker support that can automatically process
 
 ## Features
 
+- **Hot Reload Development**: Real-time plugin updates without restarting the bot
 - **Daily Message Logging**: Separate log files for each day with timestamps
 - **Media Downloads**: Automatic download and storage of images, videos, and documents
 - **Custom Server Support**: Uses your own SMP/XFTP servers (no official servers)
