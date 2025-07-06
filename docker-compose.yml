@@ -11,6 +11,9 @@ services:
       - ./.env:/app/.env:ro
       - ./config_manager.py:/app/config_manager.py:ro
       - ./bot.py:/app/bot.py
+      - ./file_download_manager.py:/app/file_download_manager.py:ro
+      - ./message_handler.py:/app/message_handler.py:ro
+      - ./websocket_manager.py:/app/websocket_manager.py:ro
       - ./start-services.sh:/app/start-services.sh
       - ./connect_invitation.sh:/app/connect_invitation.sh:ro
       - ./check_connection.sh:/app/check_connection.sh:ro

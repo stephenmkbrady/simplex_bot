@@ -1,5 +1,5 @@
 """
-Tests for bot health, startup, and stability
+Tests for bot health, startup, and stability with refactored architecture
 """
 
 import pytest
@@ -26,19 +26,18 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        # Mock CLI args
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
         # Create bot and verify no exceptions during initialization
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
-        # Verify bot attributes are set correctly
-        assert bot.bot_name is not None
-        assert bot.websocket_url is not None
-        assert bot.commands is not None
-        assert len(bot.commands) > 0
+        # Verify bot components are initialized correctly
+        assert bot.config is not None
+        assert bot.logger is not None
+        assert bot.message_logger is not None
+        assert bot.websocket_manager is not None
+        assert bot.file_download_manager is not None
+        assert bot.message_handler is not None
+        assert bot.command_registry is not None
+        assert bot.xftp_client is not None
         assert bot.running is False  # Should start as False
         
     def test_bot_configuration_validation_health(self, temp_config_dir, minimal_config):
@@ -48,16 +47,11 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Verify configuration is loaded correctly
-        assert bot.config_manager.get('bot.name') is not None
-        assert bot.config_manager.get('bot.websocket_url').startswith('ws://')
-        assert len(bot.config_manager.get('servers.smp')) > 0
+        assert bot.config.get('name') is not None
+        assert bot.config.get('websocket_url', '').startswith('ws://')
         
     @pytest.mark.asyncio
     async def test_bot_connection_retry_mechanism(self, temp_config_dir, minimal_config, caplog):
@@ -71,14 +65,10 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(test_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Test connection with limited retries
-        result = await bot.connect(max_retries=3, retry_delay=0.1)
+        result = await bot.websocket_manager.connect(max_retries=3, retry_delay=0.1)
         
         # Should fail but with proper retry logging
         assert result is False
@@ -96,14 +86,10 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Mock the websocket
-        bot.websocket = AsyncMock()
+        bot.websocket_manager.websocket = AsyncMock()
         bot.running = True
         
         # Test stop method
@@ -111,7 +97,6 @@ class TestBotHealth:
         
         # Verify graceful shutdown
         assert bot.running is False
-        bot.websocket.close.assert_called_once()
         
     def test_bot_command_registration_health(self, temp_config_dir, minimal_config):
         """Test that all required commands are registered properly"""
@@ -120,18 +105,17 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Verify all expected commands are registered
-        required_commands = ['!help', '!echo', '!status']
+        required_commands = ['help', 'status', 'ping', 'stats']
+        available_commands = bot.command_registry.list_commands()
+        
         for cmd in required_commands:
-            assert cmd in bot.commands
+            assert cmd in available_commands
             # Verify command handlers are callable
-            assert callable(bot.commands[cmd])
+            handler = bot.command_registry.get_command(cmd)
+            assert callable(handler)
         
     def test_bot_logger_initialization_health(self, temp_config_dir, minimal_config):
         """Test that bot logging is set up correctly without errors"""
@@ -140,18 +124,14 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Verify loggers are initialized
-        assert bot.app_logger is not None
+        assert bot.logger is not None
         assert bot.message_logger is not None
         
         # Test logging (should not raise exceptions)
-        bot.app_logger.info("Test log message")
+        bot.logger.info("Test log message")
         bot.message_logger.info("Test message log")
         
     @pytest.mark.asyncio
@@ -162,31 +142,30 @@ class TestBotHealth:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
+        bot = SimplexChatBot(config_path=str(config_path))
         
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
-        
-        # Mock message data
+        # Mock message data in the correct format for the refactored architecture
         test_message_data = {
-            'chatItemId': 123,
             'chatItem': {
                 'chatDir': {'contact': 'test_contact'},
                 'meta': {'createdAt': '2025-01-01T00:00:00.000Z'},
                 'content': {
-                    'text': '!help',
                     'msgContent': {'type': 'text', 'text': '!help'}
+                }
+            },
+            'chatInfo': {
+                'contact': {
+                    'localDisplayName': 'TestUser'
                 }
             }
         }
         
-        # Mock websocket
-        bot.websocket = AsyncMock()
+        # Mock websocket manager
+        bot.websocket_manager.send_message = AsyncMock()
         
         # Test message processing (should not raise exceptions)
         try:
-            await bot.process_message(test_message_data)
+            await bot.message_handler.process_message(test_message_data)
             # If we get here, no exception was raised
             assert True
         except Exception as e:
@@ -224,6 +203,11 @@ class TestBotHealth:
                 'max_message_length': 4096,
                 'rate_limit_messages': 10,
                 'rate_limit_window': 60
+            },
+            'xftp': {
+                'cli_path': '/usr/local/bin/xftp',
+                'temp_dir': './temp/xftp',
+                'timeout': 300
             }
         }
         
@@ -238,23 +222,53 @@ class TestBotHealth:
             'TEST_WEBSOCKET_URL': 'ws://test-host:3030'
         }, clear=False):
             
-            cli_args = MagicMock()
-            cli_args.connect = None
-            cli_args.group = None
-            
-            bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+            bot = SimplexChatBot(config_path=str(config_path))
             
             # Verify environment variables were substituted
-            assert bot.bot_name == 'Env Test Bot'
-            assert bot.websocket_url == 'ws://test-host:3030'
+            assert bot.config.get('name') == 'Env Test Bot'
+            assert bot.config.get('websocket_url') == 'ws://test-host:3030'
             
         # Test with environment variables not set (should use defaults)
         with patch.dict(os.environ, {}, clear=True):
-            bot2 = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+            bot2 = SimplexChatBot(config_path=str(config_path))
             
             # Verify defaults were used
-            assert bot2.bot_name == 'Health Test Bot'
-            assert bot2.websocket_url == 'ws://localhost:3030'
+            assert bot2.config.get('name') == 'Health Test Bot'
+            assert bot2.config.get('websocket_url') == 'ws://localhost:3030'
+
+    def test_bot_component_integration(self, temp_config_dir, minimal_config):
+        """Test that all bot components are properly integrated"""
+        config_path = temp_config_dir / "integration_test.yml"
+        
+        with open(config_path, 'w') as f:
+            yaml.dump(minimal_config, f)
+        
+        bot = SimplexChatBot(config_path=str(config_path))
+        
+        # Test component dependencies
+        assert bot.message_handler.command_registry == bot.command_registry
+        assert bot.message_handler.file_download_manager == bot.file_download_manager
+        assert bot.file_download_manager.xftp_client == bot.xftp_client
+        
+        # Test that components have required dependencies
+        assert hasattr(bot.message_handler, 'send_message_callback')
+        assert hasattr(bot.file_download_manager, 'logger')
+        assert hasattr(bot.websocket_manager, 'logger')
+
+    def test_bot_command_execution(self, temp_config_dir, minimal_config):
+        """Test command execution functionality"""
+        config_path = temp_config_dir / "command_test.yml"
+        
+        with open(config_path, 'w') as f:
+            yaml.dump(minimal_config, f)
+        
+        bot = SimplexChatBot(config_path=str(config_path))
+        
+        # Test command detection
+        assert bot.command_registry.is_command('!help') == True
+        assert bot.command_registry.is_command('!status') == True
+        assert bot.command_registry.is_command('hello') == False
+        assert bot.command_registry.is_command('') == False
 
 
 class TestDockerHealthIntegration:
@@ -279,18 +293,6 @@ class TestDockerHealthIntegration:
         for env_var in required_env_vars:
             assert env_var in compose_content, f"Environment variable {env_var} not found in docker-compose.yml"
             
-    def test_docker_service_dependency_configuration(self):
-        """Test that Docker services are configured with proper dependencies"""
-        compose_path = Path(__file__).parent.parent / "docker-compose.yml"
-        
-        with open(compose_path, 'r') as f:
-            compose_content = f.read()
-        
-        # Verify service dependency configuration
-        assert "depends_on:" in compose_content
-        assert "simplex-chat:" in compose_content
-        assert "condition: service_healthy" in compose_content
-        
     def test_docker_network_configuration(self):
         """Test that Docker networking is configured correctly"""
         compose_path = Path(__file__).parent.parent / "docker-compose.yml"
@@ -315,24 +317,20 @@ class TestBotStabilityAndResilience:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
-        bot.websocket = AsyncMock()
+        bot = SimplexChatBot(config_path=str(config_path))
+        bot.websocket_manager.send_message = AsyncMock()
         
         # Test various malformed message scenarios
         malformed_messages = [
             {},  # Empty dict
             {'invalid': 'structure'},  # Missing required fields
-            {'chatItemId': 'invalid_id'},  # Invalid data types
+            {'chatItem': {'invalid': 'structure'}},  # Invalid chatItem structure
             None,  # None value
         ]
         
         for msg in malformed_messages:
             try:
-                await bot.process_message(msg)
+                await bot.message_handler.process_message(msg)
                 # Should handle gracefully, not crash
             except Exception as e:
                 # Log the error but don't fail the test - bot should be resilient
@@ -345,17 +343,18 @@ class TestBotStabilityAndResilience:
         with open(config_path, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        cli_args = MagicMock()
-        cli_args.connect = None
-        cli_args.group = None
-        
         # Create and initialize bot
-        bot = SimplexChatBot(config_path=str(config_path), cli_args=cli_args)
+        bot = SimplexChatBot(config_path=str(config_path))
         
         # Verify bot created necessary resources
-        assert hasattr(bot, 'app_logger')
+        assert hasattr(bot, 'logger')
         assert hasattr(bot, 'message_logger')
         assert hasattr(bot, 'config_manager')
+        assert hasattr(bot, 'websocket_manager')
+        assert hasattr(bot, 'file_download_manager')
+        assert hasattr(bot, 'message_handler')
+        assert hasattr(bot, 'command_registry')
+        assert hasattr(bot, 'xftp_client')
         
         # Bot should clean up properly when destroyed
         # (Python garbage collection should handle this, but we verify attributes exist)

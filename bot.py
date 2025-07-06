@@ -157,6 +157,7 @@ class CommandRegistry:
             return False
         
         # Check if starts with command prefix (default: !)
+        text = text.strip()
         if text.startswith('!'):
             command_part = text[1:].split()[0] if text[1:].split() else ""
             return command_part in self.commands
