@@ -25,6 +25,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy bot code and scripts
 COPY bot.py .
 COPY simplex_utils.py .
+COPY config_manager.py .
+COPY xftp_client.py .
+COPY file_download_manager.py .
+COPY message_handler.py .
+COPY websocket_manager.py .
 COPY connect_invitation.sh .
 COPY check_connection.sh .
 COPY websocket_connect.py .
@@ -34,8 +39,8 @@ COPY connect.sh .
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # Create logs directory and set permissions
-RUN mkdir -p /app/logs /app/media /app/temp && \
-    chown -R appuser:appuser /app
+RUN mkdir -p /app/logs /app/media /app/temp /app/temp/xftp && \
+    chown -R 1000:1001 /app
 
 # Make scripts executable
 RUN chmod +x connect_invitation.sh check_connection.sh connect.sh

@@ -1,0 +1,9 @@
+media/*
+logs/*
+docs/*
+bot_profile/*
+temp
+
+__pycache__
+
+.env
