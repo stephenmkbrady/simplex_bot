@@ -171,12 +171,14 @@ class UniversalPluginManager:
         
         try:
             # Remove from cache if exists (for hot reloading)
-            module_name = f"plugins.{plugin_name}.plugin"
+            # Build module name relative to plugins_dir
+            relative_plugin_dir = str(self.plugins_dir).replace('/', '.')
+            module_name = f"{relative_plugin_dir}.{plugin_name}.plugin"
             if module_name in sys.modules:
                 del sys.modules[module_name]
             
             # Also remove the parent module if exists
-            parent_module_name = f"plugins.{plugin_name}"
+            parent_module_name = f"{relative_plugin_dir}.{plugin_name}"
             if parent_module_name in sys.modules:
                 del sys.modules[parent_module_name]
             
