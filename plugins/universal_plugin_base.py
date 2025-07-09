@@ -81,12 +81,13 @@ class BotAdapter(ABC):
 class UniversalBotPlugin(ABC):
     """Universal plugin base class that works across different bot platforms"""
     
-    def __init__(self, name: str):
+    def __init__(self, name: str, logger = None):
         self.name = name
         self.enabled = True
         self.version = "1.0.0"
         self.description = "A universal bot plugin"
         self.adapter: Optional[BotAdapter] = None
+        self.logger = logger
         self.supported_platforms = [BotPlatform.MATRIX, BotPlatform.SIMPLEX]  # Override in subclasses
     
     @abstractmethod

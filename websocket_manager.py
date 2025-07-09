@@ -123,17 +123,118 @@ class WebSocketManager:
             return None
     
     async def send_message(self, contact_name: str, message: str) -> None:
-        """Send a message to a specific contact"""
+        """Send a message to a specific contact, splitting long messages"""
         # Security configuration - these could be passed in constructor
         MAX_MESSAGE_LENGTH = 4096
         
         if len(message) > MAX_MESSAGE_LENGTH:
-            self.logger.warning(f"Message too long ({len(message)} chars), truncating")
-            message = message[:MAX_MESSAGE_LENGTH] + "..."
+            self.logger.info(f"Message too long ({len(message)} chars), splitting into multiple messages")
+            
+            # Split message intelligently
+            chunks = self._split_message_smartly(message, MAX_MESSAGE_LENGTH)
+            
+            for i, chunk in enumerate(chunks):
+                if len(chunks) > 1:
+                    # Add part indicator for multi-part messages
+                    if i == 0:
+                        chunk_message = f"{chunk}\n\n--- (Part {i+1}/{len(chunks)}) ---"
+                    elif i == len(chunks) - 1:
+                        chunk_message = f"--- (Part {i+1}/{len(chunks)}) ---\n\n{chunk}"
+                    else:
+                        chunk_message = f"--- (Part {i+1}/{len(chunks)}) ---\n\n{chunk}\n\n--- (continues...) ---"
+                else:
+                    chunk_message = chunk
+                
+                command = f"@{contact_name} {chunk_message}"
+                await self.send_command(command)
+                self.logger.info(f"Sent message part {i+1}/{len(chunks)} to {contact_name}: {chunk_message[:100]}...")
+                
+                # Small delay between messages to avoid flooding
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(0.5)
+        else:
+            command = f"@{contact_name} {message}"
+            await self.send_command(command)
+            self.logger.info(f"Sent message to {contact_name}: {message[:100]}...")
+    
+    def _split_message_smartly(self, message: str, max_length: int) -> list[str]:
+        """Split message intelligently at natural break points"""
+        if len(message) <= max_length:
+            return [message]
         
-        command = f"@{contact_name} {message}"
-        await self.send_command(command)
-        self.logger.info(f"Sent message to {contact_name}: {message[:100]}...")
+        chunks = []
+        current_chunk = ""
+        
+        # Split by paragraphs first (double newlines)
+        paragraphs = message.split('\n\n')
+        
+        for paragraph in paragraphs:
+            # If adding this paragraph would exceed limit, start new chunk
+            if len(current_chunk) + len(paragraph) + 2 > max_length:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+                
+                # If single paragraph is too long, split it by sentences
+                if len(paragraph) > max_length:
+                    sentences = self._split_by_sentences(paragraph, max_length)
+                    for sentence in sentences:
+                        if len(current_chunk) + len(sentence) + 1 > max_length:
+                            if current_chunk:
+                                chunks.append(current_chunk.strip())
+                                current_chunk = ""
+                        current_chunk += sentence + " "
+                else:
+                    current_chunk = paragraph
+            else:
+                if current_chunk:
+                    current_chunk += "\n\n" + paragraph
+                else:
+                    current_chunk = paragraph
+        
+        # Add remaining chunk
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+    
+    def _split_by_sentences(self, text: str, max_length: int) -> list[str]:
+        """Split text by sentences when paragraphs are too long"""
+        sentences = []
+        current = ""
+        
+        # Split by common sentence endings
+        import re
+        sentence_endings = re.split(r'([.!?]+\s+)', text)
+        
+        for i in range(0, len(sentence_endings), 2):
+            sentence = sentence_endings[i]
+            if i + 1 < len(sentence_endings):
+                sentence += sentence_endings[i + 1]
+            
+            if len(current) + len(sentence) > max_length:
+                if current:
+                    sentences.append(current.strip())
+                    current = ""
+                
+                # If single sentence is still too long, split by words
+                if len(sentence) > max_length:
+                    words = sentence.split()
+                    for word in words:
+                        if len(current) + len(word) + 1 > max_length:
+                            if current:
+                                sentences.append(current.strip())
+                                current = ""
+                        current += word + " "
+                else:
+                    current = sentence
+            else:
+                current += sentence
+        
+        if current:
+            sentences.append(current.strip())
+        
+        return sentences
     
     async def accept_contact_request(self, request_number: int) -> None:
         """Accept an incoming contact request"""
