@@ -25,6 +25,12 @@ from xftp_client import XFTPClient
 from plugins.universal_plugin_manager import UniversalPluginManager
 from plugins.simplex_adapter import SimplexBotAdapter
 
+# Import admin manager
+from admin_manager import AdminManager
+
+# Import invite manager
+from invite_manager import InviteManager
+
 # Constants
 DEFAULT_MAX_MESSAGE_LENGTH = 4096
 DEFAULT_RATE_LIMIT_MESSAGES = 10
@@ -128,8 +134,10 @@ class DailyRotatingLogger:
 class CommandRegistry:
     """Registry for bot commands with extensible architecture"""
     
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger, admin_manager: AdminManager, bot_instance=None):
         self.logger = logger
+        self.admin_manager = admin_manager
+        self.bot_instance = bot_instance
         self.commands = {}
         self._register_default_commands()
     
@@ -140,6 +148,10 @@ class CommandRegistry:
             'status': self._status_command,
             'ping': self._ping_command,
             'stats': self._stats_command,
+            'admin': self._admin_command,
+            'reload_admin': self._reload_admin_command,
+            'invite': self._invite_command,
+            'debug': self._debug_command,
         }
     
     def register_command(self, name: str, handler):
@@ -181,6 +193,15 @@ class CommandRegistry:
         command_name = parts[0] if parts else ""
         args = parts[1:] if len(parts) > 1 else []
         
+        # Use contact_name for admin checks (simple and reliable)
+        user_identifier = contact_name
+        
+        # Check admin permissions before executing any command
+        if not self.admin_manager.can_run_command(user_identifier, command_name):
+            denial_message = self.admin_manager.get_denied_message(user_identifier, command_name)
+            self.logger.warning(f"Access denied for user {contact_name} to command {command_name}")
+            return denial_message
+        
         # First try plugin manager if available
         if plugin_manager:
             try:
@@ -216,6 +237,7 @@ class CommandRegistry:
             async def capture_callback(contact: str, message: str):
                 response_capture["response"] = message
             
+            # Call handler with standard arguments
             await handler(args, contact_name, capture_callback)
             return response_capture.get("response", "Command executed")
             
@@ -225,8 +247,24 @@ class CommandRegistry:
     
     async def _help_command(self, args: list, contact_name: str, send_message_callback):
         """Help command handler"""
-        commands = ", ".join(self.list_commands())
-        help_text = f"Available commands: {commands}"
+        # Use contact_name for admin checks
+        user_identifier = contact_name
+        
+        is_admin = self.admin_manager.is_admin(user_identifier)
+        all_commands = self.list_commands()
+        
+        # Filter commands based on permissions
+        available_commands = []
+        for cmd in all_commands:
+            if self.admin_manager.can_run_command(user_identifier, cmd):
+                available_commands.append(cmd)
+        
+        help_text = f"Available commands: {', '.join(available_commands)}"
+        
+        if is_admin:
+            help_text += "\n\nAdmin commands: !admin, !reload_admin, !invite"
+            help_text += "\nUse !admin for admin management and !invite for connection invites."
+        
         await send_message_callback(contact_name, help_text)
     
     async def _status_command(self, args: list, contact_name: str, send_message_callback):
@@ -240,6 +278,290 @@ class CommandRegistry:
     async def _stats_command(self, args: list, contact_name: str, send_message_callback):
         """Stats command handler"""
         await send_message_callback(contact_name, "Statistics feature coming soon!")
+    
+    async def _debug_command(self, args: list, contact_name: str, send_message_callback):
+        """Debug command handler - tests WebSocket connectivity"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can use debug commands.")
+            return
+        
+        if not args:
+            help_text = """Debug commands:
+!debug websocket - Test WebSocket connection
+!debug ping - Send test ping to SimpleX CLI
+!debug restart - Force restart SimpleX CLI process"""
+            await send_message_callback(contact_name, help_text)
+            return
+        
+        subcommand = args[0].lower()
+        
+        if subcommand == "websocket":
+            # Get WebSocket info
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                ws_id = id(ws_manager.websocket) if ws_manager.websocket else None
+                
+                response = f"""🔌 WebSocket Debug Info:
+ID: {ws_id}
+Connected: {ws_manager.websocket is not None}
+URL: {ws_manager.websocket_url}
+Pending requests: {len(ws_manager.pending_requests)}"""
+                
+                await send_message_callback(contact_name, response)
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available")
+        
+        elif subcommand == "ping":
+            # Send a test command to SimpleX CLI
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                await send_message_callback(contact_name, "🏓 Sending test ping to SimpleX CLI...")
+                
+                try:
+                    # Send a simple status command
+                    response = await ws_manager.send_command("/help", wait_for_response=True)
+                    
+                    if response:
+                        await send_message_callback(contact_name, "🏓 Pong! SimpleX CLI responded successfully")
+                    else:
+                        await send_message_callback(contact_name, "🏓 No response from SimpleX CLI (timeout)")
+                        
+                except Exception as e:
+                    await send_message_callback(contact_name, f"🏓 Ping failed: {type(e).__name__}: {e}")
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available")
+        
+        elif subcommand == "restart":
+            # Force restart SimpleX CLI
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                await send_message_callback(contact_name, "🔄 Force restarting SimpleX CLI process...")
+                
+                try:
+                    if await ws_manager.restart_cli_process():
+                        await send_message_callback(contact_name, "✅ CLI restart successful! User messages should now flow.")
+                    else:
+                        await send_message_callback(contact_name, "❌ CLI restart failed. Check logs for details.")
+                        
+                except Exception as e:
+                    await send_message_callback(contact_name, f"🔄 Restart failed: {type(e).__name__}: {e}")
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available")
+        
+        else:
+            await send_message_callback(contact_name, f"Unknown debug subcommand: {subcommand}")
+    
+    async def _admin_command(self, args: list, contact_name: str, send_message_callback):
+        """Admin management command handler"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can use admin commands.")
+            return
+        
+        if not args:
+            help_text = """Admin commands:
+!admin list - List all admins
+!admin add <username> - Add admin with full permissions
+!admin remove <username> - Remove admin
+!admin permissions <username> - Show user permissions
+!admin reload - Reload admin config"""
+            await send_message_callback(contact_name, help_text)
+            return
+        
+        subcommand = args[0].lower()
+        
+        if subcommand == "list":
+            admins = self.admin_manager.list_admins()
+            if not admins:
+                await send_message_callback(contact_name, "No admins configured.")
+                return
+            
+            admin_list = []
+            for admin_name, commands in admins.items():
+                cmd_str = "all commands" if "*" in commands else ", ".join(commands)
+                admin_list.append(f"• {admin_name}: {cmd_str}")
+            
+            response = "Current admins:\n" + "\n".join(admin_list)
+            await send_message_callback(contact_name, response)
+        
+        elif subcommand == "add":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !admin add <username>")
+                return
+            
+            username = args[1]
+            if self.admin_manager.add_admin(username):
+                await send_message_callback(contact_name, f"Added {username} as admin with full permissions.")
+            else:
+                await send_message_callback(contact_name, f"Failed to add {username} as admin.")
+        
+        elif subcommand == "remove":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !admin remove <username>")
+                return
+            
+            username = args[1]
+            if username == contact_name:
+                await send_message_callback(contact_name, "You cannot remove yourself as admin.")
+                return
+            
+            if self.admin_manager.remove_admin(username):
+                await send_message_callback(contact_name, f"Removed {username} from admins.")
+            else:
+                await send_message_callback(contact_name, f"Failed to remove {username} or user not found.")
+        
+        elif subcommand == "permissions":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !admin permissions <username>")
+                return
+            
+            username = args[1]
+            perms = self.admin_manager.get_user_permissions(username)
+            
+            if perms['is_admin']:
+                cmd_str = "all commands" if "*" in perms['admin_commands'] else ", ".join(perms['admin_commands'])
+                response = f"User {username} is an admin with permissions: {cmd_str}"
+            else:
+                response = f"User {username} is not an admin. Can only run public commands: {', '.join(perms['public_commands'])}"
+            
+            await send_message_callback(contact_name, response)
+        
+        elif subcommand == "reload":
+            self.admin_manager.reload_config()
+            await send_message_callback(contact_name, "Admin configuration reloaded.")
+        
+        else:
+            await send_message_callback(contact_name, f"Unknown admin subcommand: {subcommand}")
+    
+    async def _reload_admin_command(self, args: list, contact_name: str, send_message_callback):
+        """Reload admin configuration command"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can reload admin config.")
+            return
+        
+        self.admin_manager.reload_config()
+        await send_message_callback(contact_name, "Admin configuration reloaded successfully.")
+    
+    async def _invite_command(self, args: list, contact_name: str, send_message_callback):
+        """Invite management command handler"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can manage invites.")
+            return
+        
+        if not args:
+            help_text = """Invite commands:
+!invite generate - Generate a one-time connection invite
+!invite list - List pending invites
+!invite revoke <invite_id> - Revoke a pending invite
+!invite stats - Show invite statistics"""
+            await send_message_callback(contact_name, help_text)
+            return
+        
+        subcommand = args[0].lower()
+        
+        if subcommand == "generate":
+            # Get the bot's invite manager from command registry
+            if self.bot_instance and hasattr(self.bot_instance, 'invite_manager'):
+                invite_manager = self.bot_instance.invite_manager
+                
+                # Use WebSocket restart method - cleanly disconnect, generate invite, reconnect
+                await send_message_callback(contact_name, "🔄 Generating invite (temporarily disconnecting)...")
+                
+                # Generate invite with WebSocket disconnect (main loop handles reconnection)
+                invite_link = await invite_manager.generate_invite_with_websocket_disconnect(
+                    self.bot_instance.websocket_manager, contact_name, contact_name)
+                
+                if invite_link:
+                    # Store the invite message to be sent after reconnection
+                    response = f"""🔗 One-time connection invite generated:
+
+{invite_link}
+
+Share this link with the user and ask them to connect using:
+/c {invite_link}
+
+This invite will be auto-accepted when used and expires in 24 hours."""
+                    
+                    # Store the message to be sent after reconnection
+                    self.bot_instance.websocket_manager.pending_invite_message = {
+                        'contact_name': contact_name,
+                        'message': response
+                    }
+                    
+                    self.logger.info(f"🎫 INVITE MESSAGE QUEUED: Message queued for {contact_name} after reconnection")
+                else:
+                    # Store failure message to be sent after reconnection
+                    self.bot_instance.websocket_manager.pending_invite_message = {
+                        'contact_name': contact_name,
+                        'message': "Failed to generate invite. Check logs for details."
+                    }
+            else:
+                await send_message_callback(contact_name, "Invite manager not available.")
+        
+        elif subcommand == "list":
+            if self.bot_instance and hasattr(self.bot_instance, 'invite_manager'):
+                invite_manager = self.bot_instance.invite_manager
+                pending_invites = invite_manager.get_pending_invites()
+                
+                if not pending_invites:
+                    await send_message_callback(contact_name, "No pending invites.")
+                    return
+                
+                response = "📋 Pending invites:\n\n"
+                for invite in pending_invites:
+                    created = invite['created_at'].strftime("%Y-%m-%d %H:%M")
+                    expires = invite['expires_at'].strftime("%Y-%m-%d %H:%M")
+                    response += f"• ID: {invite['id']}\n"
+                    response += f"  Requested by: {invite['requested_by']}\n"
+                    response += f"  Created: {created}\n"
+                    response += f"  Expires: {expires}\n\n"
+                
+                await send_message_callback(contact_name, response)
+            else:
+                await send_message_callback(contact_name, "Invite manager not available.")
+        
+        elif subcommand == "revoke":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !invite revoke <invite_id>")
+                return
+            
+            invite_id = args[1]
+            
+            if self.bot_instance and hasattr(self.bot_instance, 'invite_manager'):
+                invite_manager = self.bot_instance.invite_manager
+                
+                if invite_manager.revoke_invite(invite_id):
+                    await send_message_callback(contact_name, f"Invite {invite_id} revoked successfully.")
+                else:
+                    await send_message_callback(contact_name, f"Invite {invite_id} not found.")
+            else:
+                await send_message_callback(contact_name, "Invite manager not available.")
+        
+        elif subcommand == "stats":
+            if self.bot_instance and hasattr(self.bot_instance, 'invite_manager'):
+                invite_manager = self.bot_instance.invite_manager
+                stats = invite_manager.get_stats()
+                
+                response = f"""📊 Invite Statistics:
+
+Pending invites: {stats['pending_invites']}/{stats['max_pending_invites']}
+Invite expiry: {stats['invite_expiry_hours']} hours"""
+                
+                await send_message_callback(contact_name, response)
+            else:
+                await send_message_callback(contact_name, "Invite manager not available.")
+        
+        else:
+            await send_message_callback(contact_name, f"Unknown invite subcommand: {subcommand}")
 
 
 class SimplexChatBot:
@@ -259,6 +581,12 @@ class SimplexChatBot:
         )
         self.logger = self.logger_manager.app_logger
         self.message_logger = self.logger_manager.message_logger
+        
+        # Initialize admin manager
+        self.admin_manager = AdminManager(logger=self.logger)
+        
+        # Initialize invite manager
+        self.invite_manager = InviteManager(logger=self.logger)
         
         # Initialize components with dependency injection
         self._initialize_components()
@@ -303,8 +631,8 @@ class SimplexChatBot:
             logger=self.logger
         )
         
-        # Initialize command registry
-        self.command_registry = CommandRegistry(self.logger)
+        # Initialize command registry (will set bot_instance after creation)
+        self.command_registry = CommandRegistry(self.logger, self.admin_manager)
         
         # Initialize message handler
         self.message_handler = MessageHandler(
@@ -315,8 +643,9 @@ class SimplexChatBot:
             message_logger=self.message_logger
         )
         
-        # Pass bot instance to message handler for plugin access
+        # Pass bot instance to message handler and command registry for plugin access
         self.message_handler._bot_instance = self
+        self.command_registry.bot_instance = self
         
         # Register WebSocket message handlers
         self.websocket_manager.register_message_handler('newChatItem', self._handle_new_chat_item)
@@ -327,8 +656,8 @@ class SimplexChatBot:
     def _initialize_plugin_system(self):
         """Initialize the universal plugin system"""
         try:
-            # Create plugin manager
-            self.plugin_manager = UniversalPluginManager("plugins/external")
+            # Create plugin manager with main bot logger
+            self.plugin_manager = UniversalPluginManager("plugins/external", logger=self.logger)
             
             # Create SimpleX adapter
             self.plugin_adapter = SimplexBotAdapter(self)
@@ -361,13 +690,72 @@ class SimplexChatBot:
             try:
                 await self.plugin_manager.discover_and_load_plugins(self.plugin_adapter)
                 self.logger.info("Plugins loaded successfully")
+                
+                # Start hot reload monitoring
+                self.logger.info("🔧 Starting hot reload monitoring...")
+                print("🔧 DEBUG: About to call start_hot_reloading()")
+                try:
+                    await self.plugin_manager.start_hot_reloading()
+                    print("🔧 DEBUG: start_hot_reloading() completed successfully")
+                    self.logger.info("✅ Hot reload monitoring started successfully")
+                except Exception as e:
+                    print(f"🔧 DEBUG: start_hot_reloading() failed: {e}")
+                    import traceback
+                    print(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+                    raise
+                
             except Exception as e:
                 self.logger.error(f"Failed to load plugins: {e}")
         
         self.logger.info("SimplexChatBot started successfully")
         
-        # Start listening for messages
-        await self.websocket_manager.listen_for_messages()
+        # Start listening for messages with reconnection handling
+        self.logger.info("🔄 MAIN LOOP: Starting main message listening loop")
+        while self.running:
+            try:
+                # Check if CLI restart is needed due to corruption
+                if getattr(self.websocket_manager, 'cli_restart_needed', False):
+                    self.logger.warning("🔄 MAIN LOOP: CLI restart needed, attempting recovery...")
+                    if await self.websocket_manager.restart_cli_process():
+                        self.logger.info("🔄 MAIN LOOP: CLI restart successful, resuming")
+                    else:
+                        self.logger.error("🔄 MAIN LOOP: CLI restart failed, continuing with reconnection")
+                
+                self.logger.info("🔄 MAIN LOOP: Calling listen_for_messages()")
+                await self.websocket_manager.listen_for_messages()
+                
+                # If we reach here, the connection was closed gracefully
+                if self.running:
+                    # Check if this was due to CLI corruption
+                    if getattr(self.websocket_manager, 'cli_restart_needed', False):
+                        self.logger.info("🔄 MAIN LOOP: Connection lost due to CLI corruption, restarting CLI...")
+                        if await self.websocket_manager.restart_cli_process():
+                            self.logger.info("🔄 MAIN LOOP: CLI restart successful, resuming message listening")
+                            continue
+                        else:
+                            self.logger.error("🔄 MAIN LOOP: CLI restart failed, trying normal reconnection")
+                    
+                    self.logger.info("🔄 MAIN LOOP: WebSocket connection lost, attempting to reconnect...")
+                    if await self.websocket_manager.connect():
+                        self.logger.info("🔄 MAIN LOOP: Successfully reconnected, resuming message listening")
+                        continue
+                    else:
+                        self.logger.error("🔄 MAIN LOOP: Failed to reconnect, stopping bot")
+                        break
+                else:
+                    # Bot is shutting down
+                    self.logger.info("🔄 MAIN LOOP: Bot shutting down, exiting message loop")
+                    break
+                    
+            except Exception as e:
+                self.logger.error(f"🔄 MAIN LOOP: Exception in message listening loop: {type(e).__name__}: {e}")
+                import traceback
+                self.logger.error(f"🔄 MAIN LOOP: Traceback: {traceback.format_exc()}")
+                if self.running:
+                    self.logger.info("🔄 MAIN LOOP: Waiting 5 seconds before retry...")
+                    await asyncio.sleep(5)  # Wait before retry
+                else:
+                    break
         
         return True
     
@@ -414,12 +802,47 @@ class SimplexChatBot:
             self.logger.info(f"New contact request from: {contact_name}")
             self.message_logger.info(f"Contact request: {contact_name}")
             
-            # Auto-accept contact requests if configured
-            if self.config.get('auto_accept_contacts', False):
-                # Implementation would need access to request number
-                self.logger.info(f"Auto-accepting contact request from {contact_name}")
+            # Check if this request should be auto-accepted based on pending invites
+            should_auto_accept = False
+            
+            # First check invite manager for pending invites
+            if hasattr(self, 'invite_manager') and self.invite_manager.should_auto_accept(contact_request):
+                should_auto_accept = True
+                self.logger.info(f"Auto-accepting contact request from {contact_name} due to pending invite")
+                # Mark an invite as used
+                self.invite_manager.mark_invite_used()
+            
+            # Fallback to config setting
+            elif self.config.get('auto_accept_contacts', False):
+                should_auto_accept = True
+                self.logger.info(f"Auto-accepting contact request from {contact_name} due to config setting")
+            
+            if should_auto_accept:
+                # Auto-accept the contact request
+                await self._accept_contact_request(contact_request)
+                
         except Exception as e:
             self.logger.error(f"Error handling contact request: {e}")
+    
+    async def _accept_contact_request(self, contact_request: Dict[str, Any]):
+        """Accept a contact request"""
+        try:
+            # Extract the contact request ID or number for acceptance
+            # This is a simplified implementation - you'd need the actual request ID
+            contact_name = contact_request.get('localDisplayName', 'Unknown')
+            
+            # Send acceptance command via WebSocket
+            # The exact command format depends on SimpleX CLI WebSocket API
+            accept_command = f"/_accept {contact_name}"
+            
+            # Log the acceptance
+            self.logger.info(f"Accepting contact request from: {contact_name}")
+            
+            # Send the accept command
+            await self.websocket_manager.send_command(accept_command)
+            
+        except Exception as e:
+            self.logger.error(f"Error accepting contact request: {e}")
     
     async def _handle_contact_connected(self, response_data: Dict[str, Any]):
         """Handle contact connection notifications"""

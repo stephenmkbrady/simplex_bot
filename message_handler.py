@@ -26,6 +26,8 @@ class MessageHandler:
         self.logger = logger
         self.message_logger = message_logger
         
+        # Removed contact ID resolver - using simple contact_name approach
+        
         # Constants
         self.MESSAGE_PREVIEW_LENGTH = 100
     
@@ -40,10 +42,8 @@ class MessageHandler:
             contact_info = chat_info.get("contact", {})
             contact_name = contact_info.get("localDisplayName", "Unknown")
             
-            # Debug logging to see the structure
-            self.logger.debug(f"Chat info keys: {list(chat_info.keys())}")
-            self.logger.debug(f"Contact info keys: {list(contact_info.keys())}")
-            self.logger.debug(f"Extracted contact name: {contact_name}")
+            # Simple approach - just use contact_name for admin checks
+            self.logger.debug(f"Processing message from contact: {contact_name}")
             
             # Get message content
             content = chat_item.get("content", {})
@@ -55,11 +55,14 @@ class MessageHandler:
             
             if msg_type == "text":
                 await self._handle_text_message(contact_name, content)
+            elif msg_type == "link":
+                # Handle link messages (treat similar to text for commands)
+                await self._handle_text_message(contact_name, content)
             elif msg_type in ["file", "image", "video", "audio", "media", "attachment"]:
                 await self._handle_file_message(contact_name, content, msg_type)
             else:
                 # Log unhandled message types
-                if msg_type not in ["text"]:
+                if msg_type not in ["text", "link"]:
                     self.logger.warning(f"Unhandled message type: {msg_type}")
                         
         except Exception as e:
@@ -140,87 +143,3 @@ class MessageHandler:
             await self.send_message_callback(contact_name, f"Error processing file: {str(e)}")
 
 
-class CommandRegistry:
-    """Registry for bot commands with extensible command system"""
-    
-    def __init__(self, command_prefix: str = "!", logger: logging.Logger = None):
-        self.command_prefix = command_prefix
-        self.logger = logger or logging.getLogger(__name__)
-        self.commands: Dict[str, Callable] = {}
-        
-        # Register default commands
-        self._register_default_commands()
-    
-    def _register_default_commands(self) -> None:
-        """Register the default bot commands"""
-        self.register_command("help", self._handle_help)
-        self.register_command("echo", self._handle_echo)
-        self.register_command("status", self._handle_status)
-    
-    def register_command(self, name: str, handler: Callable) -> None:
-        """Register a new command handler"""
-        command_name = f"{self.command_prefix}{name}"
-        self.commands[command_name] = handler
-        self.logger.debug(f"Registered command: {command_name}")
-    
-    def is_command(self, text: str) -> bool:
-        """Check if text is a command"""
-        return any(text.startswith(cmd) for cmd in self.commands.keys())
-    
-    async def execute_command(self, text: str, contact_name: str) -> Optional[str]:
-        """Execute a command and return the response"""
-        parts = text.split()
-        command = parts[0].lower()
-        args = parts[1:] if len(parts) > 1 else []
-        
-        if command in self.commands:
-            try:
-                return await self.commands[command](contact_name, args)
-            except Exception as e:
-                self.logger.error(f"Error handling command {command}: {e}")
-                return f"Error processing command: {command}"
-        else:
-            available_commands = ", ".join(self.commands.keys())
-            return f"Unknown command: {command}. Available: {available_commands}"
-    
-    def get_commands_list(self) -> List[str]:
-        """Get list of available commands"""
-        return list(self.commands.keys())
-    
-    # Default command handlers
-    async def _handle_help(self, contact_name: str, args: List[str] = None) -> str:
-        """Handle the !help command"""
-        commands_list = ", ".join(self.commands.keys())
-        
-        help_text = f"""
-🤖 SimpleX Bot Commands:
-
-{commands_list}
-
-📡 Bot is online and ready
-🕒 Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Use !status for detailed information.
-        """.strip()
-        
-        return help_text
-    
-    async def _handle_echo(self, contact_name: str, args: List[str] = None) -> str:
-        """Handle the !echo command"""
-        if not args:
-            return "Usage: !echo <text_to_echo>"
-        
-        echo_text = " ".join(args)
-        return f"Echo: {echo_text}"
-    
-    async def _handle_status(self, contact_name: str, args: List[str] = None) -> str:
-        """Handle the !status command - placeholder for now"""
-        # This will be populated by the main bot class with actual status info
-        return f"""
-📊 SimpleX Bot Status
-
-🔗 Connection: Active
-🕒 Runtime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-For detailed status information, the bot owner needs to implement status reporting.
-        """.strip()

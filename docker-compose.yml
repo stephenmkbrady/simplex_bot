@@ -22,6 +22,10 @@ services:
       - ./simplex_utils.py:/app/simplex_utils.py:ro
       - ./xftp_client.py:/app/xftp_client.py:ro
       - ./connect.sh:/app/connect.sh:ro
+      - ./admin_manager.py:/app/admin_manager.py:ro
+      - ./admin_config.yml:/app/admin_config.yml
+      - ./invite_manager.py:/app/invite_manager.py:ro
+      - ./contact_id_resolver.py:/app/contact_id_resolver.py:ro
     ports:
       - "3030:3030"
     env_file:

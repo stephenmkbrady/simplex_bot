@@ -1,0 +1,19 @@
+admins:
+  "youradminusername":
+    commands:
+    - '*'
+    description: Main administrator with full access
+public_commands:
+- help
+- status
+- ping
+- stats
+- admin
+- reload_admin
+- invite
+- youtube
+- yt
+settings:
+  admin_only_mode: false
+  default_deny_message: Access denied. You need admin permissions to use this command.
+  require_admin_for_plugins: true
