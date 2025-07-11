@@ -1,8 +1,12 @@
 admins:
-  "youradminusername":
+  admin1:
     commands:
     - '*'
     description: Main administrator with full access
+  admin2:
+    commands:
+    - '*'
+    description: Admin added at runtime
 public_commands:
 - help
 - status
@@ -11,6 +15,9 @@ public_commands:
 - admin
 - reload_admin
 - invite
+- contacts
+- groups
+- debug
 - youtube
 - yt
 settings:

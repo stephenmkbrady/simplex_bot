@@ -14,7 +14,6 @@ from typing import Dict, Any, Optional, Callable
 # Constants
 DEFAULT_MAX_RETRIES = 30
 DEFAULT_RETRY_DELAY = 2
-DEFAULT_TIMEOUT_SECONDS = 30
 
 
 class WebSocketError(Exception):
@@ -47,11 +46,35 @@ class WebSocketManager:
         
         # Pending invite message storage
         self.pending_invite_message = None
+        
+        # Command response callbacks
+        self.command_callbacks = {}
     
     def register_message_handler(self, message_type: str, handler: Callable) -> None:
         """Register a handler for specific message types"""
         self.message_handlers[message_type] = handler
         self.logger.debug(f"Registered handler for message type: {message_type}")
+    
+    def register_command_callback(self, command: str, callback: Callable) -> None:
+        """Register a callback for command responses"""
+        self.command_callbacks[command] = callback
+        self.logger.debug(f"Registered callback for command: {command}")
+    
+    async def _handle_contacts_response(self, response_data: Dict) -> None:
+        """Handle contactsList response and trigger callback"""
+        try:
+            self.logger.info(f"🔔 CONTACTS HANDLER: Starting contacts response handler")
+            if '/contacts' in self.command_callbacks:
+                callback = self.command_callbacks['/contacts']
+                self.logger.info(f"🔔 CONTACTS HANDLER: Found callback, executing...")
+                await callback(response_data)
+                self.logger.info(f"🔔 CONTACTS HANDLER: Callback completed successfully")
+            else:
+                self.logger.warning("🔔 CONTACTS HANDLER: No callback registered for /contacts command")
+        except Exception as e:
+            self.logger.error(f"🔔 CONTACTS HANDLER ERROR: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.error(f"🔔 CONTACTS HANDLER TRACEBACK: {traceback.format_exc()}")
     
     def generate_correlation_id(self) -> str:
         """Generate a unique correlation ID for requests"""
@@ -160,31 +183,24 @@ class WebSocketManager:
         }
         
         try:
+            # Debug: Log WebSocket state before sending
+            self.logger.info(f"🔍 WS DEBUG: About to send command on WebSocket {id(self.websocket)}")
+            self.logger.info(f"🔍 WS DEBUG: WebSocket state - connected: {self.websocket is not None}")
+            
+            # Log the exact message being sent
+            self.logger.info(f"🔍 RAW SEND: {json.dumps(message)}")
+            
             await self.websocket.send(json.dumps(message))
             self.logger.info(f"📤 SENT: Command '{command}' sent successfully (corr_id: {corr_id})")
+            self.logger.info(f"🔍 WS DEBUG: Send completed without exceptions")
             
             if wait_for_response:
-                # Store the request for correlation
+                # Store the request for correlation - response will be handled by _handle_response
                 self.pending_requests[corr_id] = {"command": command, "timestamp": time.time()}
-                
-                # Wait for response (with timeout)
-                timeout = DEFAULT_TIMEOUT_SECONDS
-                start_time = time.time()
-                
-                self.logger.info(f"📤 WAIT: Waiting for response to '{command}' (corr_id: {corr_id})")
-                
-                while corr_id in self.pending_requests:
-                    if time.time() - start_time > timeout:
-                        self.logger.warning(f"📤 TIMEOUT: No response to command '{command}' (corr_id: {corr_id})")
-                        del self.pending_requests[corr_id]
-                        return None
-                    
-                    await asyncio.sleep(0.1)
-                
-                # Response should be stored with "_response" suffix
-                response = self.pending_requests.get(f"{corr_id}_response")
-                self.logger.info(f"📤 RESPONSE: Received response for '{command}' (corr_id: {corr_id})")
-                return response
+                self.logger.info(f"📤 NO-BLOCK SETUP: Stored pending request '{corr_id}' for async response")
+                self.logger.info(f"📤 NO-BLOCK SETUP: Response will be handled by message listener")
+                # Don't wait or block - let the message listener handle the response via _handle_response
+                return None
                 
         except (websockets.exceptions.ConnectionClosed, json.JSONEncodeError) as e:
             self.logger.error(f"📤 WEBSOCKET ERROR: {type(e).__name__}: {e}")
@@ -199,6 +215,7 @@ class WebSocketManager:
         """Send a message to a specific contact, splitting long messages"""
         websocket_id = id(self.websocket) if self.websocket else None
         self.logger.info(f"📤 SEND START: Sending to {contact_name} via WebSocket {websocket_id}")
+        self.logger.info(f"📤 SEND MESSAGE CONTENT: {message[:100]}...")
         
         # Security configuration - these could be passed in constructor
         MAX_MESSAGE_LENGTH = 4096
@@ -348,6 +365,22 @@ class WebSocketManager:
                 
                 try:
                     data = json.loads(message)
+                    
+                    # Debug: Log raw message for correlation debugging
+                    corr_id = data.get('corrId', 'None')
+                    msg_type = data.get('resp', {}).get('Right', {}).get('type', 'unknown')
+                    self.logger.info(f"🔍 RAW RECV: corrId={corr_id}, type={msg_type}")
+                    
+                    # DEBUG: If this is a contactsList response, log the actual contact data
+                    if msg_type == 'contactsList':
+                        contacts = data.get('resp', {}).get('Right', {}).get('contacts', [])
+                        self.logger.info(f"🔍 CONTACTS DATA: Found {len(contacts)} contacts in response")
+                        for i, contact in enumerate(contacts[:5], 1):  # Log first 5 contacts
+                            name = contact.get('localDisplayName', 'Unknown')
+                            status = contact.get('contactStatus', 'unknown')
+                            self.logger.info(f"🔍 CONTACT {i}: {name} ({status})")
+                        if len(contacts) > 5:
+                            self.logger.info(f"🔍 CONTACTS: ... and {len(contacts) - 5} more")
                     
                     # Smart logging that filters out base64 image data
                     self._log_websocket_message_safely(message, data)
@@ -539,11 +572,15 @@ class WebSocketManager:
             corr_id = response_data.get("corrId")
             resp = response_data.get("resp", {})
             
+            # CORRELATION DEBUG: Log every response with correlation details
+            self.logger.info(f"🔍 CORRELATION DEBUG: Processing response with corrId='{corr_id}'")
+            self.logger.info(f"🔍 CORRELATION DEBUG: Current pending_requests keys: {list(self.pending_requests.keys())}")
+            
             # Handle SimpleX Chat CLI's Either-type responses (Right wrapper for success)
             if "Right" in resp:
                 actual_resp = resp["Right"]
                 resp_type = actual_resp.get("type", "")
-                self.logger.debug(f"Processing Right-wrapped response type: {resp_type}")
+                self.logger.info(f"🔍 CORRELATION DEBUG: Right-wrapped response type: {resp_type}")
             elif "Left" in resp:
                 # Handle error responses (Left wrapper)
                 error_resp = resp["Left"]
@@ -553,14 +590,38 @@ class WebSocketManager:
                 # Fallback for direct responses (shouldn't happen with current SimpleX CLI)
                 actual_resp = resp
                 resp_type = resp.get("type", "")
-                self.logger.debug(f"Processing direct response type: {resp_type}")
+                self.logger.info(f"🔍 CORRELATION DEBUG: Direct response type: {resp_type}")
             
             # Handle correlation ID responses first
-            if corr_id and corr_id in self.pending_requests:
-                # Store the response
-                self.pending_requests[f"{corr_id}_response"] = response_data
-                # Remove the pending request
-                del self.pending_requests[corr_id]
+            if corr_id:
+                self.logger.info(f"🔍 CORRELATION DEBUG: Found corrId '{corr_id}', checking if in pending_requests...")
+                if corr_id in self.pending_requests:
+                    self.logger.info(f"✅ CORRELATION SUCCESS: Found pending request for '{corr_id}' - storing response")
+                    
+                    # Get the original request info
+                    request_info = self.pending_requests[corr_id]
+                    command = request_info.get('command', '')
+                    
+                    # Store the response
+                    response_key = f"{corr_id}_response"
+                    self.pending_requests[response_key] = response_data
+                    self.logger.info(f"✅ CORRELATION SUCCESS: Stored response with key '{response_key}'")
+                    
+                    # Remove the pending request
+                    del self.pending_requests[corr_id]
+                    self.logger.info(f"✅ CORRELATION SUCCESS: Removed pending request '{corr_id}'")
+                    
+                    # Trigger callback for specific commands
+                    if command == '/contacts' and resp_type == 'contactsList':
+                        self.logger.info(f"🔔 CONTACTS CALLBACK: Triggering contacts list callback")
+                        asyncio.create_task(self._handle_contacts_response(response_data))
+                    
+                    self.logger.info(f"✅ CORRELATION SUCCESS: Updated pending_requests keys: {list(self.pending_requests.keys())}")
+                else:
+                    self.logger.warning(f"❌ CORRELATION MISS: corrId '{corr_id}' not found in pending_requests")
+                    self.logger.warning(f"❌ CORRELATION MISS: Available keys were: {list(self.pending_requests.keys())}")
+            else:
+                self.logger.info(f"🔍 CORRELATION DEBUG: No corrId in response - not a command response")
             
             # Route to appropriate message handler
             if resp_type in self.message_handlers:

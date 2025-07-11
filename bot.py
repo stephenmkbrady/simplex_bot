@@ -152,6 +152,8 @@ class CommandRegistry:
             'reload_admin': self._reload_admin_command,
             'invite': self._invite_command,
             'debug': self._debug_command,
+            'contacts': self._contacts_command,
+            'groups': self._groups_command,
         }
     
     def register_command(self, name: str, handler):
@@ -262,8 +264,9 @@ class CommandRegistry:
         help_text = f"Available commands: {', '.join(available_commands)}"
         
         if is_admin:
-            help_text += "\n\nAdmin commands: !admin, !reload_admin, !invite"
-            help_text += "\nUse !admin for admin management and !invite for connection invites."
+            help_text += "\n\nAdmin commands: !admin, !reload_admin, !invite, !contacts, !groups, !debug"
+            help_text += "\nUse !admin for admin management, !invite for connection invites."
+            help_text += "\nUse !contacts list to see bot contacts, !groups list to see groups."
         
         await send_message_callback(contact_name, help_text)
     
@@ -318,19 +321,37 @@ Pending requests: {len(ws_manager.pending_requests)}"""
             if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
                 ws_manager = self.bot_instance.websocket_manager
                 
-                await send_message_callback(contact_name, "🏓 Sending test ping to SimpleX CLI...")
+                await send_message_callback(contact_name, "🏓 Testing SimpleX CLI commands...")
                 
-                try:
-                    # Send a simple status command
-                    response = await ws_manager.send_command("/help", wait_for_response=True)
-                    
-                    if response:
-                        await send_message_callback(contact_name, "🏓 Pong! SimpleX CLI responded successfully")
-                    else:
-                        await send_message_callback(contact_name, "🏓 No response from SimpleX CLI (timeout)")
-                        
-                except Exception as e:
-                    await send_message_callback(contact_name, f"🏓 Ping failed: {type(e).__name__}: {e}")
+                # Test valid SimpleX CLI commands
+                test_commands = [
+                    "/help",            # Show available commands
+                    "/contacts",        # List contacts
+                    "/groups",          # List groups
+                    "/c",               # Contact shorthand
+                    "/g",               # Groups shorthand
+                    "/connect",         # Connection command
+                ]
+                
+                working_commands = []
+                for cmd in test_commands:
+                    try:
+                        self.logger.info(f"🔍 Testing CLI command: {cmd}")
+                        response = await ws_manager.send_command(cmd, wait_for_response=True)
+                        if response:
+                            working_commands.append(cmd)
+                            self.logger.info(f"✅ Command {cmd} works!")
+                        else:
+                            self.logger.info(f"❌ Command {cmd} timeout")
+                    except Exception as e:
+                        self.logger.info(f"❌ Command {cmd} failed: {e}")
+                
+                if working_commands:
+                    result = f"🏓 CLI responding! Working commands: {', '.join(working_commands)}"
+                else:
+                    result = "🏓 CLI not responding to any test commands"
+                
+                await send_message_callback(contact_name, result)
             else:
                 await send_message_callback(contact_name, "WebSocket manager not available")
         
@@ -562,6 +583,398 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
         
         else:
             await send_message_callback(contact_name, f"Unknown invite subcommand: {subcommand}")
+    
+    async def _contacts_command(self, args: list, contact_name: str, send_message_callback):
+        """List contacts command - admin only"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can list contacts.")
+            return
+        
+        if not args:
+            help_text = """Contact commands:
+!contacts list - List all contacts
+!contacts info <name> - Get contact details"""
+            await send_message_callback(contact_name, help_text)
+            return
+        
+        subcommand = args[0].lower()
+        
+        if subcommand == "list":
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                # Register callback for contacts response
+                async def contacts_callback(response_data):
+                    try:
+                        self.logger.info(f"🔔 CALLBACK START: Processing contacts callback")
+                        contacts_info = self._parse_contacts_response(response_data)
+                        self.logger.info(f"🔔 CALLBACK: Parsed {len(contacts_info) if contacts_info else 0} contacts")
+                        
+                        if contacts_info:
+                            contact_list = []
+                            for i, contact in enumerate(contacts_info, 1):
+                                name = contact.get('localDisplayName', 'Unknown')
+                                contact_status = contact.get('contactStatus', 'unknown')
+                                conn_status = 'disconnected'
+                                if 'activeConn' in contact and contact['activeConn']:
+                                    conn_status = contact['activeConn'].get('connStatus', 'unknown')
+                                contact_list.append(f"{i}. {name} (Contact: {contact_status}, Connection: {conn_status})")
+                            
+                            response_text = f"📋 Bot Contacts ({len(contacts_info)} total):\n\n" + "\n".join(contact_list)
+                        else:
+                            response_text = "No contacts found."
+                        
+                        self.logger.info(f"🔔 CALLBACK: About to send response: {response_text[:50]}...")
+                        self.logger.info(f"🔔 CALLBACK: Sending to contact: {contact_name}")
+                        
+                        # Call WebSocket manager's send_message directly instead of the wrapper
+                        if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                            await self.bot_instance.websocket_manager.send_message(contact_name, response_text)
+                            self.logger.info(f"🔔 CALLBACK: Direct send_message completed successfully")
+                        else:
+                            self.logger.error(f"🔔 CALLBACK: No WebSocket manager available for direct send")
+                            # Fallback to the wrapper
+                            await send_message_callback(contact_name, response_text)
+                            self.logger.info(f"🔔 CALLBACK: Fallback send_message_callback completed")
+                    except Exception as e:
+                        self.logger.error(f"🔔 CALLBACK ERROR: {type(e).__name__}: {e}")
+                        import traceback
+                        self.logger.error(f"🔔 CALLBACK TRACEBACK: {traceback.format_exc()}")
+                        await send_message_callback(contact_name, f"Error processing contacts: {type(e).__name__}: {e}")
+                
+                try:
+                    # Register the callback and send the command
+                    ws_manager.register_command_callback('/contacts', contacts_callback)
+                    await ws_manager.send_command("/contacts", wait_for_response=True)
+                    # Response will be handled asynchronously by the callback
+                        
+                except Exception as e:
+                    await send_message_callback(contact_name, f"Error sending contacts command: {type(e).__name__}: {e}")
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available.")
+        
+        elif subcommand == "info":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !contacts info <contact_name>")
+                return
+            
+            contact_to_check = " ".join(args[1:])
+            
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                try:
+                    # Send command to get specific contact info
+                    response = await ws_manager.send_command(f"/contact {contact_to_check}", wait_for_response=True)
+                    
+                    if response:
+                        contact_info = self._parse_contact_info_response(response)
+                        if contact_info:
+                            info_text = f"📋 Contact Info for {contact_to_check}:\n\n"
+                            info_text += f"Display Name: {contact_info.get('localDisplayName', 'Unknown')}\n"
+                            info_text += f"Profile Name: {contact_info.get('profile', {}).get('displayName', 'Unknown')}\n"
+                            info_text += f"Connection: {contact_info.get('activeConn', 'Unknown')}\n"
+                            info_text += f"Created: {contact_info.get('createdAt', 'Unknown')}"
+                        else:
+                            info_text = f"Contact '{contact_to_check}' not found."
+                    else:
+                        info_text = f"Failed to get info for contact '{contact_to_check}'."
+                        
+                except Exception as e:
+                    info_text = f"Error getting contact info: {type(e).__name__}: {e}"
+                
+                await send_message_callback(contact_name, info_text)
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available.")
+        
+        else:
+            await send_message_callback(contact_name, f"Unknown contacts subcommand: {subcommand}")
+    
+    async def _groups_command(self, args: list, contact_name: str, send_message_callback):
+        """List groups command - admin only"""
+        user_identifier = contact_name
+        
+        if not self.admin_manager.is_admin(user_identifier):
+            await send_message_callback(contact_name, "Access denied. Only admins can list groups.")
+            return
+        
+        if not args:
+            help_text = """Group commands:
+!groups list - List all groups
+!groups info <name> - Get group details
+!groups invite <name> - Generate group invite link"""
+            await send_message_callback(contact_name, help_text)
+            return
+        
+        subcommand = args[0].lower()
+        
+        if subcommand == "list":
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                try:
+                    # Use the correct SimpleX CLI command to list groups
+                    response = await ws_manager.send_command("/groups", wait_for_response=True)
+                    
+                    if response:
+                        # Parse the response to extract group names
+                        groups_info = self._parse_groups_response(response)
+                        
+                        if groups_info:
+                            group_list = []
+                            for i, group in enumerate(groups_info, 1):
+                                name = group.get('displayName', 'Unknown')
+                                members = group.get('membership', {}).get('memberRole', 'Unknown')
+                                group_list.append(f"{i}. {name} (Role: {members})")
+                            
+                            response_text = f"📋 Bot Groups ({len(groups_info)} total):\n\n" + "\n".join(group_list)
+                        else:
+                            response_text = "No groups found."
+                    else:
+                        response_text = "Failed to get groups list from SimpleX CLI."
+                        
+                except Exception as e:
+                    response_text = f"Error getting groups: {type(e).__name__}: {e}"
+                
+                await send_message_callback(contact_name, response_text)
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available.")
+        
+        elif subcommand == "info":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !groups info <group_name>")
+                return
+            
+            group_to_check = " ".join(args[1:])
+            
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                try:
+                    # Send command to get specific group info
+                    response = await ws_manager.send_command(f"/group {group_to_check}", wait_for_response=True)
+                    
+                    if response:
+                        group_info = self._parse_group_info_response(response)
+                        if group_info:
+                            info_text = f"📋 Group Info for {group_to_check}:\n\n"
+                            info_text += f"Display Name: {group_info.get('displayName', 'Unknown')}\n"
+                            info_text += f"Description: {group_info.get('description', 'None')}\n"
+                            info_text += f"Member Role: {group_info.get('membership', {}).get('memberRole', 'Unknown')}\n"
+                            info_text += f"Created: {group_info.get('createdAt', 'Unknown')}"
+                        else:
+                            info_text = f"Group '{group_to_check}' not found."
+                    else:
+                        info_text = f"Failed to get info for group '{group_to_check}'."
+                        
+                except Exception as e:
+                    info_text = f"Error getting group info: {type(e).__name__}: {e}"
+                
+                await send_message_callback(contact_name, info_text)
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available.")
+        
+        elif subcommand == "invite":
+            if len(args) < 2:
+                await send_message_callback(contact_name, "Usage: !groups invite <group_name>")
+                return
+            
+            group_name = " ".join(args[1:])
+            
+            if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                ws_manager = self.bot_instance.websocket_manager
+                
+                try:
+                    await send_message_callback(contact_name, f"🔄 Generating group invite for '{group_name}'...")
+                    
+                    # Send command to generate group invite
+                    response = await ws_manager.send_command(f"/{group_name} /add", wait_for_response=True)
+                    
+                    if response:
+                        invite_link = self._parse_group_invite_response(response)
+                        if invite_link:
+                            response_text = f"""🔗 Group invite generated for '{group_name}':
+
+{invite_link}
+
+Share this link to invite users to the group.
+Note: Group invite permissions depend on your role in the group."""
+                        else:
+                            response_text = f"Failed to generate invite for group '{group_name}'. Check if you have permission to invite members."
+                    else:
+                        response_text = f"Failed to generate invite for group '{group_name}'."
+                        
+                except Exception as e:
+                    response_text = f"Error generating group invite: {type(e).__name__}: {e}"
+                
+                await send_message_callback(contact_name, response_text)
+            else:
+                await send_message_callback(contact_name, "WebSocket manager not available.")
+        
+        else:
+            await send_message_callback(contact_name, f"Unknown groups subcommand: {subcommand}")
+    
+    def _parse_contacts_response(self, response):
+        """Parse SimpleX CLI /contacts command response"""
+        try:
+            self.logger.info(f"Parsing contacts response: {type(response)}: {str(response)[:200]}...")
+            
+            if isinstance(response, dict):
+                resp = response.get('resp', {})
+                if 'Right' in resp:
+                    actual_resp = resp['Right']
+                    # Check if this is a contactsList response
+                    if isinstance(actual_resp, dict) and actual_resp.get('type') == 'contactsList':
+                        contacts = actual_resp.get('contacts', [])
+                        self.logger.info(f"Found {len(contacts)} contacts in response")
+                        return contacts
+                # Handle error responses
+                elif 'Left' in resp:
+                    error_info = resp['Left']
+                    self.logger.error(f"CLI error response: {error_info}")
+                    return []
+            
+            return []
+        except Exception as e:
+            self.logger.error(f"Error parsing contacts response: {e}")
+            return []
+    
+    def _parse_contacts_text(self, text):
+        """Parse text output from /contacts command"""
+        try:
+            contacts = []
+            lines = text.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('--') and not line.startswith('You have'):
+                    # Simple parsing - extract contact names
+                    # Format might be like: "1. ContactName @active" or just "ContactName"
+                    if '. ' in line:
+                        parts = line.split('. ', 1)
+                        if len(parts) > 1:
+                            contact_name = parts[1].split(' ')[0]  # Get first word after number
+                            contacts.append({'localDisplayName': contact_name, 'activeConn': 'active'})
+                    elif line and not line.startswith('/'):
+                        # Just treat the line as a contact name
+                        contact_name = line.split(' ')[0]
+                        contacts.append({'localDisplayName': contact_name, 'activeConn': 'unknown'})
+            
+            return contacts
+        except Exception as e:
+            self.logger.error(f"Error parsing contacts text: {e}")
+            return []
+    
+    def _parse_contact_info_response(self, response):
+        """Parse SimpleX CLI contact info response"""
+        try:
+            if isinstance(response, dict):
+                resp = response.get('resp', {})
+                if 'Right' in resp:
+                    actual_resp = resp['Right']
+                    if 'contact' in actual_resp:
+                        return actual_resp['contact']
+                    elif isinstance(actual_resp, dict) and 'localDisplayName' in actual_resp:
+                        return actual_resp
+            return None
+        except Exception as e:
+            self.logger.error(f"Error parsing contact info response: {e}")
+            return None
+    
+    def _parse_groups_response(self, response):
+        """Parse SimpleX CLI /groups command response"""
+        try:
+            self.logger.info(f"Parsing groups response: {type(response)}: {str(response)[:200]}...")
+            
+            if isinstance(response, dict):
+                resp = response.get('resp', {})
+                if 'Right' in resp:
+                    actual_resp = resp['Right']
+                    # Check if this is a groupsList response
+                    if isinstance(actual_resp, dict) and actual_resp.get('type') == 'groupsList':
+                        groups = actual_resp.get('groups', [])
+                        self.logger.info(f"Found {len(groups)} groups in response")
+                        return groups
+                # Handle error responses
+                elif 'Left' in resp:
+                    error_info = resp['Left']
+                    self.logger.error(f"CLI error response: {error_info}")
+                    return []
+            
+            return []
+        except Exception as e:
+            self.logger.error(f"Error parsing groups response: {e}")
+            return []
+    
+    def _parse_groups_text(self, text):
+        """Parse text output from /groups command"""
+        try:
+            groups = []
+            lines = text.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('--') and not line.startswith('You have'):
+                    # Simple parsing - extract group names
+                    # Format might be like: "1. GroupName (5 members)" or just "GroupName"
+                    if '. ' in line:
+                        parts = line.split('. ', 1)
+                        if len(parts) > 1:
+                            group_name = parts[1].split(' ')[0]  # Get first word after number
+                            groups.append({'displayName': group_name, 'membership': {'memberRole': 'member'}})
+                    elif line and not line.startswith('/'):
+                        # Just treat the line as a group name
+                        group_name = line.split(' ')[0]
+                        groups.append({'displayName': group_name, 'membership': {'memberRole': 'unknown'}})
+            
+            return groups
+        except Exception as e:
+            self.logger.error(f"Error parsing groups text: {e}")
+            return []
+    
+    def _parse_group_info_response(self, response):
+        """Parse SimpleX CLI group info response"""
+        try:
+            if isinstance(response, dict):
+                resp = response.get('resp', {})
+                if 'Right' in resp:
+                    actual_resp = resp['Right']
+                    if 'group' in actual_resp:
+                        return actual_resp['group']
+                    elif isinstance(actual_resp, dict) and 'displayName' in actual_resp:
+                        return actual_resp
+            return None
+        except Exception as e:
+            self.logger.error(f"Error parsing group info response: {e}")
+            return None
+    
+    def _parse_group_invite_response(self, response):
+        """Parse SimpleX CLI group invite response to extract invite link"""
+        try:
+            if isinstance(response, dict):
+                resp = response.get('resp', {})
+                if 'Right' in resp:
+                    actual_resp = resp['Right']
+                    # Look for invitation link in various possible fields
+                    if isinstance(actual_resp, str):
+                        if 'https://simplex.chat/invitation' in actual_resp:
+                            import re
+                            match = re.search(r'https://simplex\.chat/invitation[^\s]*', actual_resp)
+                            if match:
+                                return match.group(0)
+                    elif isinstance(actual_resp, dict):
+                        for key, value in actual_resp.items():
+                            if isinstance(value, str) and 'https://simplex.chat/invitation' in value:
+                                import re
+                                match = re.search(r'https://simplex\.chat/invitation[^\s]*', value)
+                                if match:
+                                    return match.group(0)
+            return None
+        except Exception as e:
+            self.logger.error(f"Error parsing group invite response: {e}")
+            return None
 
 
 class SimplexChatBot:
