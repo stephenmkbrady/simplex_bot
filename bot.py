@@ -336,7 +336,7 @@ Pending requests: {len(ws_manager.pending_requests)}"""
                 for cmd in test_commands:
                     try:
                         self.logger.info(f"🔍 Testing CLI command: {cmd}")
-                        response = await ws_manager.send_command(cmd, wait_for_response=True)
+                        response = await ws_manager.send_command(cmd, wait_for_response=False)  # Non-blocking
                         if response:
                             working_commands.append(cmd)
                             self.logger.info(f"✅ Command {cmd} works!")
@@ -666,7 +666,7 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
                 
                 try:
                     # Send command to get specific contact info
-                    response = await ws_manager.send_command(f"/contact {contact_to_check}", wait_for_response=True)
+                    response = await ws_manager.send_command(f"/contact {contact_to_check}", wait_for_response=False)  # Non-blocking
                     
                     if response:
                         contact_info = self._parse_contact_info_response(response)
@@ -772,7 +772,7 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
                 
                 try:
                     # Send command to get specific group info
-                    response = await ws_manager.send_command(f"/group {group_to_check}", wait_for_response=True)
+                    response = await ws_manager.send_command(f"/group {group_to_check}", wait_for_response=False)  # Non-blocking
                     
                     if response:
                         group_info = self._parse_group_info_response(response)
@@ -808,7 +808,7 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
                     await send_message_callback(contact_name, f"🔄 Generating group invite for '{group_name}'...")
                     
                     # Send command to generate group invite
-                    response = await ws_manager.send_command(f"/{group_name} /add", wait_for_response=True)
+                    response = await ws_manager.send_command(f"/{group_name} /add", wait_for_response=False)  # Non-blocking
                     
                     if response:
                         invite_link = self._parse_group_invite_response(response)
