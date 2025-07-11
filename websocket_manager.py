@@ -76,6 +76,22 @@ class WebSocketManager:
             import traceback
             self.logger.error(f"🔔 CONTACTS HANDLER TRACEBACK: {traceback.format_exc()}")
     
+    async def _handle_groups_response(self, response_data: Dict) -> None:
+        """Handle groupsList response and trigger callback"""
+        try:
+            self.logger.info(f"🔔 GROUPS HANDLER: Starting groups response handler")
+            if '/groups' in self.command_callbacks:
+                callback = self.command_callbacks['/groups']
+                self.logger.info(f"🔔 GROUPS HANDLER: Found callback, executing...")
+                await callback(response_data)
+                self.logger.info(f"🔔 GROUPS HANDLER: Callback completed successfully")
+            else:
+                self.logger.warning("🔔 GROUPS HANDLER: No callback registered for /groups command")
+        except Exception as e:
+            self.logger.error(f"🔔 GROUPS HANDLER ERROR: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.error(f"🔔 GROUPS HANDLER TRACEBACK: {traceback.format_exc()}")
+    
     def generate_correlation_id(self) -> str:
         """Generate a unique correlation ID for requests"""
         self.correlation_counter += 1
@@ -615,6 +631,9 @@ class WebSocketManager:
                     if command == '/contacts' and resp_type == 'contactsList':
                         self.logger.info(f"🔔 CONTACTS CALLBACK: Triggering contacts list callback")
                         asyncio.create_task(self._handle_contacts_response(response_data))
+                    elif command == '/groups' and resp_type == 'groupsList':
+                        self.logger.info(f"🔔 GROUPS CALLBACK: Triggering groups list callback")
+                        asyncio.create_task(self._handle_groups_response(response_data))
                     
                     self.logger.info(f"✅ CORRELATION SUCCESS: Updated pending_requests keys: {list(self.pending_requests.keys())}")
                 else:

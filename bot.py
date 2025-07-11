@@ -36,7 +36,6 @@ DEFAULT_MAX_MESSAGE_LENGTH = 4096
 DEFAULT_RATE_LIMIT_MESSAGES = 10
 DEFAULT_RATE_LIMIT_WINDOW = 60  # seconds
 DEFAULT_RETENTION_DAYS = 30
-DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_RETRIES = 30
 DEFAULT_RETRY_DELAY = 2
 MESSAGE_PREVIEW_LENGTH = 100
@@ -714,13 +713,12 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
             if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
                 ws_manager = self.bot_instance.websocket_manager
                 
-                try:
-                    # Use the correct SimpleX CLI command to list groups
-                    response = await ws_manager.send_command("/groups", wait_for_response=True)
-                    
-                    if response:
-                        # Parse the response to extract group names
-                        groups_info = self._parse_groups_response(response)
+                # Register callback for groups response
+                async def groups_callback(response_data):
+                    try:
+                        self.logger.info(f"🔔 GROUPS CALLBACK: Processing groups callback")
+                        groups_info = self._parse_groups_response(response_data)
+                        self.logger.info(f"🔔 GROUPS CALLBACK: Parsed {len(groups_info) if groups_info else 0} groups")
                         
                         if groups_info:
                             group_list = []
@@ -732,13 +730,33 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
                             response_text = f"📋 Bot Groups ({len(groups_info)} total):\n\n" + "\n".join(group_list)
                         else:
                             response_text = "No groups found."
-                    else:
-                        response_text = "Failed to get groups list from SimpleX CLI."
+                        
+                        self.logger.info(f"🔔 GROUPS CALLBACK: About to send response: {response_text[:50]}...")
+                        
+                        # Call WebSocket manager's send_message directly
+                        if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                            await self.bot_instance.websocket_manager.send_message(contact_name, response_text)
+                            self.logger.info(f"🔔 GROUPS CALLBACK: Direct send_message completed successfully")
+                        else:
+                            self.logger.error(f"🔔 GROUPS CALLBACK: No WebSocket manager available for direct send")
+                            await send_message_callback(contact_name, response_text)
+                            
+                    except Exception as e:
+                        self.logger.error(f"🔔 GROUPS CALLBACK ERROR: {type(e).__name__}: {e}")
+                        import traceback
+                        self.logger.error(f"🔔 GROUPS CALLBACK TRACEBACK: {traceback.format_exc()}")
+                        if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                            await self.bot_instance.websocket_manager.send_message(contact_name, f"Error processing groups: {type(e).__name__}: {e}")
+                
+                try:
+                    # Register the callback and send the command
+                    ws_manager.register_command_callback('/groups', groups_callback)
+                    await ws_manager.send_command("/groups", wait_for_response=True)
+                    # Response will be handled asynchronously by the callback
                         
                 except Exception as e:
-                    response_text = f"Error getting groups: {type(e).__name__}: {e}"
-                
-                await send_message_callback(contact_name, response_text)
+                    if self.bot_instance and hasattr(self.bot_instance, 'websocket_manager'):
+                        await self.bot_instance.websocket_manager.send_message(contact_name, f"Error sending groups command: {type(e).__name__}: {e}")
             else:
                 await send_message_callback(contact_name, "WebSocket manager not available.")
         
