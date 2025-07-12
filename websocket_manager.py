@@ -233,6 +233,16 @@ class WebSocketManager:
         self.logger.info(f"📤 SEND START: Sending to {contact_name} via WebSocket {websocket_id}")
         self.logger.info(f"📤 SEND MESSAGE CONTENT: {message[:100]}...")
         
+        # Determine if this is a group or direct message
+        # Groups typically have names like "botgroup_11", "test123", etc.
+        # Contacts are typically user names like "alice", etc.
+        is_group = (contact_name.startswith(('botgroup', 'group', 'test')) or 
+                   '_' in contact_name or 
+                   any(char.isdigit() for char in contact_name.split('_')[-1] if '_' in contact_name))
+        
+        prefix = "#" if is_group else "@"
+        self.logger.info(f"📤 SEND DEBUG: Detected {'group' if is_group else 'contact'}, using prefix '{prefix}'")
+        
         # Security configuration - these could be passed in constructor
         MAX_MESSAGE_LENGTH = 4096
         
@@ -254,7 +264,7 @@ class WebSocketManager:
                 else:
                     chunk_message = chunk
                 
-                command = f"@{contact_name} {chunk_message}"
+                command = f"{prefix}{contact_name} {chunk_message}"
                 await self.send_command(command)
                 self.logger.info(f"Sent message part {i+1}/{len(chunks)} to {contact_name}: {chunk_message[:100]}...")
                 
@@ -262,7 +272,7 @@ class WebSocketManager:
                 if i < len(chunks) - 1:
                     await asyncio.sleep(0.5)
         else:
-            command = f"@{contact_name} {message}"
+            command = f"{prefix}{contact_name} {message}"
             await self.send_command(command)
             self.logger.info(f"Sent message to {contact_name}: {message[:100]}...")
     

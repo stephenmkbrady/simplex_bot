@@ -172,7 +172,7 @@ class CommandRegistry:
         
         return False
     
-    async def execute_command(self, text: str, contact_name: str, plugin_manager=None) -> Optional[str]:
+    async def execute_command(self, text: str, contact_name: str, plugin_manager=None, message_data: Dict[str, Any] = None) -> Optional[str]:
         """Execute a command and return the response"""
         if not self.is_command(text):
             return None
@@ -196,15 +196,31 @@ class CommandRegistry:
         if plugin_manager:
             try:
                 from plugins.universal_plugin_base import CommandContext, BotPlatform
+                # Handle both direct and group chat contexts
+                if message_data:
+                    chat_info = message_data.get("chatInfo", {})
+                    chat_type = chat_info.get("chatType", "direct")
+                    
+                    if chat_type == "group":
+                        group_info = chat_info.get("groupInfo", {})
+                        chat_id = group_info.get("groupName", contact_name)
+                    else:
+                        chat_id = contact_name
+                        
+                    raw_message = message_data
+                else:
+                    chat_id = contact_name
+                    raw_message = {}
+                
                 context = CommandContext(
                     command=command_name,
                     args=args,
                     args_raw=' '.join(args),
                     user_id=contact_name,
-                    chat_id=contact_name,
+                    chat_id=chat_id,
                     user_display_name=contact_name,
                     platform=BotPlatform.SIMPLEX,
-                    raw_message={}
+                    raw_message=raw_message
                 )
                 
                 plugin_result = await plugin_manager.handle_command(context)
@@ -369,6 +385,8 @@ class SimplexChatBot:
         self.websocket_manager.register_message_handler('newChatItems', self._handle_new_chat_items)
         self.websocket_manager.register_message_handler('contactRequest', self._handle_contact_request)
         self.websocket_manager.register_message_handler('contactConnected', self._handle_contact_connected)
+        self.websocket_manager.register_message_handler('receivedGroupInvitation', self._handle_group_invitation)
+        self.websocket_manager.register_message_handler('memberJoinedGroup', self._handle_member_joined_group)
     
     def _initialize_plugin_system(self):
         """Initialize the universal plugin system"""
@@ -575,6 +593,125 @@ class SimplexChatBot:
             
         except Exception as e:
             self.logger.error(f"Error handling contact connected: {e}")
+    
+    async def _handle_group_invitation(self, response_data: Dict[str, Any]):
+        """Handle incoming group invitations"""
+        try:
+            self.logger.info(f"🎯 GROUP INVITATION DEBUG: Processing group invitation")
+            
+            # Extract data directly from response_data structure
+            from_contact = response_data.get('contact', {})
+            group_info = response_data.get('groupInfo', {})
+            
+            from_contact_name = from_contact.get('localDisplayName', 'Unknown')
+            group_name = group_info.get('localDisplayName', group_info.get('groupProfile', {}).get('displayName', 'Unknown Group'))
+            group_id = group_info.get('groupId')
+            
+            self.logger.info(f"Group invitation to '{group_name}' (ID: {group_id}) from: {from_contact_name}")
+            self.message_logger.info(f"Group invitation: {group_name} from {from_contact_name}")
+            
+            # Check if the inviter is an admin
+            is_admin_inviter = self.admin_manager.is_admin(from_contact_name)
+            
+            if is_admin_inviter:
+                self.logger.info(f"Auto-accepting group invitation to '{group_name}' from admin {from_contact_name}")
+                
+                # Check if we're already a member (invitation might be auto-accepted)
+                membership = group_info.get('membership', {})
+                member_status = membership.get('memberStatus', 'unknown')
+                
+                self.logger.info(f"Current membership status: {member_status}")
+                
+                if member_status == 'invited':
+                    self.logger.info(f"Status is 'invited', attempting to accept invitation")
+                    await self._accept_group_invitation(response_data)
+                elif member_status == 'member':
+                    self.logger.info(f"🎉 Already a member of group '{group_name}'! No action needed.")
+                else:
+                    self.logger.info(f"Unknown status '{member_status}', trying to accept anyway")
+                    await self._accept_group_invitation(response_data)
+            else:
+                self.logger.info(f"Ignoring group invitation to '{group_name}' from non-admin {from_contact_name}")
+                
+        except Exception as e:
+            self.logger.error(f"Error handling group invitation: {e}")
+            self.logger.error(f"Full response_data for debugging: {response_data}")
+    
+    async def _accept_group_invitation(self, response_data: Dict[str, Any]):
+        """Accept a group invitation"""
+        try:
+            group_info = response_data.get('groupInfo', {})
+            group_id = group_info.get('groupId')
+            group_name = group_info.get('localDisplayName', group_info.get('groupProfile', {}).get('displayName', 'Unknown Group'))
+            
+            # Also check membership info for additional details
+            membership = group_info.get('membership', {})
+            member_id = membership.get('memberId')
+            group_member_id = membership.get('groupMemberId')
+            
+            self.logger.info(f"Debug: group_id={group_id}, member_id={member_id}, group_member_id={group_member_id}")
+            self.logger.info(f"Attempting to accept group invitation using /join commands")
+            
+            if not group_id:
+                self.logger.error(f"Cannot accept group invitation: missing group ID for '{group_name}'")
+                return
+            
+            # Try different approaches to accept group invitation
+            # Based on testing, use /join commands for group invitations
+            commands_to_try = [
+                f"/join {group_name}",            # Join with group name (primary)
+                f"/join {group_id}",              # Join with group ID (fallback)
+            ]
+            
+            # Try each command until one works
+            for i, command in enumerate(commands_to_try):
+                try:
+                    self.logger.info(f"Attempt {i+1}: Trying command: {command}")
+                    
+                    # Send the command through WebSocket
+                    response = await self.websocket_manager.send_command(command, wait_for_response=True)
+                    
+                    self.logger.info(f"Command response: {response}")
+                    
+                    # If we get here without error, the command might have worked
+                    if response and 'error' not in str(response).lower():
+                        self.logger.info(f"✅ Successfully sent command: {command}")
+                        break
+                    else:
+                        self.logger.warning(f"Command {command} returned error or empty response")
+                        
+                except Exception as e:
+                    self.logger.warning(f"Command '{command}' failed: {e}")
+                    if i == len(commands_to_try) - 1:  # Last attempt
+                        self.logger.error(f"All command attempts failed for group '{group_name}'")
+                        raise e
+                    # Continue to next command
+            
+            self.logger.info(f"Group invitation acceptance process completed for '{group_name}'")
+            
+        except Exception as e:
+            self.logger.error(f"Error accepting group invitation: {e}")
+    
+    async def _handle_member_joined_group(self, response_data: Dict[str, Any]):
+        """Handle when a member (including the bot) joins a group"""
+        try:
+            group_info = response_data.get('groupInfo', {})
+            member_info = response_data.get('memberInfo', {})
+            
+            group_name = group_info.get('groupName', 'Unknown Group')
+            member_name = member_info.get('localDisplayName', 'Unknown Member')
+            
+            # Check if this is the bot joining
+            # Assuming the bot's member info will have a specific identifier or we can detect it
+            self.logger.info(f"Member '{member_name}' joined group '{group_name}'")
+            self.message_logger.info(f"Group join: {member_name} -> {group_name}")
+            
+            # If this is the bot itself joining (you may need to adjust this logic based on actual response structure)
+            if member_name == self.config.get('bot_name', 'SimpleX Bot') or 'bot' in member_name.lower():
+                self.logger.info(f"🎉 Bot successfully joined group '{group_name}'!")
+                
+        except Exception as e:
+            self.logger.error(f"Error handling member joined group: {e}")
 
 
 def parse_arguments():

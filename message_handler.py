@@ -38,12 +38,49 @@ class MessageHandler:
             chat_item = message_data.get("chatItem", {})
             chat_info = message_data.get("chatInfo", {})
             
-            # Get contact name - it's nested in the contact object
-            contact_info = chat_info.get("contact", {})
-            contact_name = contact_info.get("localDisplayName", "Unknown")
+            # Debug: Log the message structure to understand the issue
+            self.logger.info(f"🔍 MESSAGE DEBUG: chat_info keys: {list(chat_info.keys())}")
+            self.logger.info(f"🔍 MESSAGE DEBUG: chat_item keys: {list(chat_item.keys())}")
             
-            # Simple approach - just use contact_name for admin checks
-            self.logger.debug(f"Processing message from contact: {contact_name}")
+            # Determine chat type (direct contact or group)
+            # Check for groupInfo to determine if this is a group message
+            if "groupInfo" in chat_info:
+                chat_type = "group"
+            elif "contact" in chat_info:
+                chat_type = "direct"
+            else:
+                # Fallback - check the 'type' field
+                chat_type = chat_info.get("type", "direct")
+            
+            self.logger.info(f"🔍 MESSAGE DEBUG: detected chat_type: '{chat_type}'")
+            
+            if chat_type == "direct":
+                # Get contact name - it's nested in the contact object
+                contact_info = chat_info.get("contact", {})
+                contact_name = contact_info.get("localDisplayName", "Unknown")
+                chat_context = f"DM from {contact_name}"
+            elif chat_type == "group":
+                # Get group and member information
+                group_info = chat_info.get("groupInfo", {})
+                chat_dir = chat_item.get("chatDir", {})
+                group_member = chat_dir.get("groupMember", {})
+                
+                # Debug: Log group parsing details
+                self.logger.info(f"🔍 GROUP DEBUG: group_info keys: {list(group_info.keys())}")
+                self.logger.info(f"🔍 GROUP DEBUG: chatDir keys: {list(chat_dir.keys())}")
+                self.logger.info(f"🔍 GROUP DEBUG: groupMember keys: {list(group_member.keys()) if group_member else 'None'}")
+                
+                # Extract group name and contact name from correct locations
+                group_name = group_info.get("localDisplayName", group_info.get("groupName", "Unknown Group"))
+                contact_name = group_member.get("localDisplayName", "Unknown Member")
+                chat_context = f"Group '{group_name}' from {contact_name}"
+                
+                self.logger.info(f"🔍 GROUP DEBUG: parsed group_name='{group_name}', contact_name='{contact_name}'")
+            else:
+                self.logger.warning(f"Unknown chat type: {chat_type}")
+                return
+            
+            self.logger.debug(f"Processing message in {chat_context}")
             
             # Get message content
             content = chat_item.get("content", {})
@@ -54,12 +91,12 @@ class MessageHandler:
             self.logger.debug(f"Processing message type: {msg_type}")
             
             if msg_type == "text":
-                await self._handle_text_message(contact_name, content)
+                await self._handle_text_message(contact_name, content, chat_context, message_data)
             elif msg_type == "link":
                 # Handle link messages (treat similar to text for commands)
-                await self._handle_text_message(contact_name, content)
+                await self._handle_text_message(contact_name, content, chat_context, message_data)
             elif msg_type in ["file", "image", "video", "audio", "media", "attachment"]:
-                await self._handle_file_message(contact_name, content, msg_type)
+                await self._handle_file_message(contact_name, content, msg_type, chat_context)
             else:
                 # Log unhandled message types
                 if msg_type not in ["text", "link"]:
@@ -70,19 +107,19 @@ class MessageHandler:
             # Log the full message structure on error for debugging
             self.logger.debug(f"Message data structure: {message_data}")
     
-    async def _handle_text_message(self, contact_name: str, content: Dict[str, Any]) -> None:
+    async def _handle_text_message(self, contact_name: str, content: Dict[str, Any], chat_context: str, message_data: Dict[str, Any]) -> None:
         """Handle text messages and command processing"""
         text = content.get("msgContent", {}).get("text", "")
         
-        # Log the message
-        self.message_logger.info(f"FROM {contact_name}: {text}")
-        self.logger.info(f"Received message from {contact_name}: {text[:self.MESSAGE_PREVIEW_LENGTH]}...")
+        # Log the message with context
+        self.message_logger.info(f"{chat_context}: {text}")
+        self.logger.info(f"Received message in {chat_context}: {text[:self.MESSAGE_PREVIEW_LENGTH]}...")
         
         # Check if it's a command
         if self.command_registry.is_command(text):
-            await self._process_command(contact_name, text)
+            await self._process_command(contact_name, text, message_data)
     
-    async def _process_command(self, contact_name: str, text: str) -> None:
+    async def _process_command(self, contact_name: str, text: str, message_data: Dict[str, Any]) -> None:
         """Process a command message"""
         try:
             # Try to get plugin manager from the bot instance
@@ -90,16 +127,27 @@ class MessageHandler:
             if hasattr(self, '_bot_instance'):
                 plugin_manager = getattr(self._bot_instance, 'plugin_manager', None)
             
-            result = await self.command_registry.execute_command(text, contact_name, plugin_manager)
+            result = await self.command_registry.execute_command(text, contact_name, plugin_manager, message_data)
             if result:
-                await self.send_message_callback(contact_name, result)
-                self.message_logger.info(f"TO {contact_name}: {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
+                # For groups, we need to send to the group, not the individual contact
+                chat_info = message_data.get("chatInfo", {})
+                
+                # Use same logic as above to detect group vs direct
+                if "groupInfo" in chat_info:
+                    # Send to group - we need the group name for this
+                    group_info = chat_info.get("groupInfo", {})
+                    group_name = group_info.get("localDisplayName", group_info.get("groupName", "Unknown Group"))
+                    await self.send_message_callback(group_name, result)
+                    self.message_logger.info(f"TO Group '{group_name}': {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
+                else:
+                    # Send to direct contact
+                    await self.send_message_callback(contact_name, result)
         except Exception as e:
             self.logger.error(f"Error executing command: {e}")
             error_msg = f"Error processing command"
             await self.send_message_callback(contact_name, error_msg)
     
-    async def _handle_file_message(self, contact_name: str, content: Dict[str, Any], msg_type: str) -> None:
+    async def _handle_file_message(self, contact_name: str, content: Dict[str, Any], msg_type: str, chat_context: str) -> None:
         """Handle file/media messages"""
         self.logger.info(f"File message detected: {msg_type}")
         
