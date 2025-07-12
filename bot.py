@@ -143,16 +143,11 @@ class CommandRegistry:
     def _register_default_commands(self):
         """Register default bot commands"""
         self.commands = {
-            'help': self._help_command,
-            'status': self._status_command,
-            'ping': self._ping_command,
-            'stats': self._stats_command,
-            'admin': self._admin_command,
-            'reload_admin': self._reload_admin_command,
-            'invite': self._invite_command,
-            'debug': self._debug_command,
-            'contacts': self._contacts_command,
-            'groups': self._groups_command,
+            # Minimal core bot command for testing basic functionality
+            'info': self._info_command,
+            # Note: All other commands moved to plugins:
+            # - help, ping, status -> Core Plugin
+            # - invite, debug, contacts, groups, admin, reload_admin, stats -> SimpleX Plugin
         }
     
     def register_command(self, name: str, handler):
@@ -246,6 +241,51 @@ class CommandRegistry:
             self.logger.error(f"Error executing command {command_name}: {e}")
             return f"Error executing command: {command_name}"
     
+    async def _info_command(self, args: list, contact_name: str, send_message_callback):
+        """Basic bot info command for testing connectivity - reads from version.yml"""
+        import yaml
+        from pathlib import Path
+        
+        # Read version info from version.yml - fail if not found
+        version_file = Path("version.yml")
+        with open(version_file, 'r') as f:
+            version_data = yaml.safe_load(f)
+        
+        bot_info = version_data['bot']
+        bot_name = bot_info['name']
+        bot_version = bot_info['version']
+        bot_description = bot_info['description']
+        platform = bot_info['platform']
+        
+        # Check plugin system status
+        plugin_status = '✅ Active' if hasattr(self.bot_instance, 'plugin_manager') else '❌ Not Available'
+        plugin_count = 0
+        if hasattr(self.bot_instance, 'plugin_manager'):
+            plugin_manager = getattr(self.bot_instance, 'plugin_manager')
+            plugin_count = len(plugin_manager.plugins)
+        
+        info_text = f"""🤖 **{bot_name}**
+
+**Version:** {bot_version}
+**Platform:** {platform}
+**Status:** ✅ Running
+
+**Description:** {bot_description}
+
+**System Status:**
+• Plugin System: {plugin_status}
+• Loaded Plugins: {plugin_count}
+• Core Commands: 1 (info)
+
+**Getting Started:**
+• Use `!help` to see all available commands
+• Use `!plugins` to see loaded plugins
+• Use `!status` for detailed bot status
+
+This is the only core command. All other functionality is provided through plugins."""
+
+        await send_message_callback(contact_name, info_text)
+
     async def _help_command(self, args: list, contact_name: str, send_message_callback):
         """Help command handler"""
         # Use contact_name for admin checks
@@ -807,8 +847,8 @@ Invite expiry: {stats['invite_expiry_hours']} hours"""
                 try:
                     await send_message_callback(contact_name, f"🔄 Generating group invite for '{group_name}'...")
                     
-                    # Send command to generate group invite
-                    response = await ws_manager.send_command(f"/{group_name} /add", wait_for_response=False)  # Non-blocking
+                    # Send command to generate group invite (fixed format)
+                    response = await ws_manager.send_command(f"/g {group_name} /add", wait_for_response=False)  # Non-blocking
                     
                     if response:
                         invite_link = self._parse_group_invite_response(response)

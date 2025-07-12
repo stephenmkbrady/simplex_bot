@@ -1,0 +1,29 @@
+# SimpleX Bot Version and Information
+bot:
+  name: "SimpleX Chat Bot"
+  version: "1.0.0"
+  description: "A Python bot for SimpleX Chat with Docker support and plugin system"
+  platform: "SimpleX Chat"
+  author: "SimpleX Bot Developer"
+  
+features:
+  - "Universal Plugin System"
+  - "Hot Reload Development"
+  - "Daily Message Logging"
+  - "Media Downloads via XFTP"
+  - "Custom Server Support"
+  - "Admin Management"
+  - "Contact & Group Management"
+  - "Invite Generation"
+  - "Docker Support"
+  
+architecture:
+  core_commands: ["info"]
+  plugin_commands:
+    core_plugin: ["help", "ping", "status", "uptime", "plugins", "commands", "platform", "info"]
+    simplex_plugin: ["invite", "contacts", "groups", "debug", "admin", "reload_admin", "stats"]
+    
+system:
+  min_python: "3.11"
+  requires_docker: true
+  config_files: ["config.yml", ".env", "admin_config.yml"]

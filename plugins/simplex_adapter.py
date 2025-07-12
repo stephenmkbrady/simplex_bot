@@ -18,6 +18,8 @@ class SimplexBotAdapter(BotAdapter):
     def __init__(self, simplex_bot):
         super().__init__(simplex_bot, BotPlatform.SIMPLEX)
         self.logger = logging.getLogger("simplex_adapter")
+        # Store reference to bot instance for SimpleX-specific plugins
+        self.bot_instance = simplex_bot
     
     async def send_message(self, message: str, context: CommandContext) -> bool:
         """Send a message back to the SimpleX contact"""

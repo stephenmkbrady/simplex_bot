@@ -10,22 +10,27 @@ services:
       - ./plugins:/app/plugins
       - ./config.yml:/app/config.yml:ro
       - ./.env:/app/.env:ro
+      # Core bot files
       - ./config_manager.py:/app/config_manager.py:ro
       - ./bot.py:/app/bot.py
       - ./file_download_manager.py:/app/file_download_manager.py:ro
       - ./message_handler.py:/app/message_handler.py:ro
       - ./websocket_manager.py:/app/websocket_manager.py:ro
-      - ./start-services.sh:/app/start-services.sh
-      - ./connect_invitation.sh:/app/connect_invitation.sh:ro
-      - ./check_connection.sh:/app/check_connection.sh:ro
-      - ./websocket_connect.py:/app/websocket_connect.py:ro
-      - ./simplex_utils.py:/app/simplex_utils.py:ro
       - ./xftp_client.py:/app/xftp_client.py:ro
-      - ./connect.sh:/app/connect.sh:ro
       - ./admin_manager.py:/app/admin_manager.py:ro
-      - ./admin_config.yml:/app/admin_config.yml
       - ./invite_manager.py:/app/invite_manager.py:ro
-      - ./contact_id_resolver.py:/app/contact_id_resolver.py:ro
+      
+      # Configuration files
+      - ./admin_config.yml:/app/admin_config.yml
+      - ./version.yml:/app/version.yml:ro
+      
+      # Startup script
+      - ./start-services.sh:/app/start-services.sh
+      
+      # Removed unused files:
+      # - connect_invitation.sh, connect.sh, check_connection.sh (standalone scripts not used by bot)
+      # - websocket_connect.py, simplex_utils.py (utility scripts not imported by main bot)
+      # - contact_id_resolver.py (not used by current bot implementation)
     ports:
       - "3030:3030"
     env_file:
