@@ -98,12 +98,13 @@ class TestBotConfigurationIntegration:
         try:
             bot = SimplexChatBot(str(config_path))
             
-            # Check available commands in command registry
+            # Check available commands in command registry (core only)
             available_commands = bot.command_registry.list_commands()
-            assert 'help' in available_commands
-            assert 'status' in available_commands
-            assert 'ping' in available_commands  # Default commands are always available
-            assert 'stats' in available_commands  # Default commands are always available
+            assert 'info' in available_commands  # Core command
+            
+            # Check plugin system is initialized (commands moved to plugins)
+            assert hasattr(bot, 'plugin_manager')
+            assert bot.plugin_manager is not None
             
         finally:
             os.chdir(original_cwd)

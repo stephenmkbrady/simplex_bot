@@ -218,7 +218,7 @@ class WebSocketManager:
                 # Don't wait or block - let the message listener handle the response via _handle_response
                 return None
                 
-        except (websockets.exceptions.ConnectionClosed, json.JSONEncodeError) as e:
+        except (websockets.ConnectionClosed, TypeError) as e:
             self.logger.error(f"📤 WEBSOCKET ERROR: {type(e).__name__}: {e}")
             raise WebSocketError(f"WebSocket communication error: {e}")
         except Exception as e:
@@ -329,12 +329,20 @@ class WebSocketManager:
                 # If single sentence is still too long, split by words
                 if len(sentence) > max_length:
                     words = sentence.split()
-                    for word in words:
-                        if len(current) + len(word) + 1 > max_length:
-                            if current:
-                                sentences.append(current.strip())
-                                current = ""
-                        current += word + " "
+                    if len(words) == 1 and len(words[0]) > max_length:
+                        # Fallback: Force truncation for unsplittable content
+                        truncated = words[0][:max_length-3] + "..."
+                        if current:
+                            sentences.append(current.strip())
+                            current = ""
+                        sentences.append(truncated)
+                    else:
+                        for word in words:
+                            if len(current) + len(word) + 1 > max_length:
+                                if current:
+                                    sentences.append(current.strip())
+                                    current = ""
+                            current += word + " "
                 else:
                     current = sentence
             else:

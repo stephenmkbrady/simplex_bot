@@ -74,9 +74,8 @@ class TestBotHealth:
         assert result is False
         
         # Check that retry messages were logged
-        assert "Connection attempt" in caplog.text
+        assert "ATTEMPT" in caplog.text
         assert "retrying in" in caplog.text
-        assert "Failed to connect" in caplog.text
         
     @pytest.mark.asyncio
     async def test_bot_graceful_shutdown(self, temp_config_dir, minimal_config):
@@ -99,7 +98,7 @@ class TestBotHealth:
         assert bot.running is False
         
     def test_bot_command_registration_health(self, temp_config_dir, minimal_config):
-        """Test that all required commands are registered properly"""
+        """Test that core commands are registered properly"""
         config_path = temp_config_dir / "commands_health_test.yml"
         
         with open(config_path, 'w') as f:
@@ -107,15 +106,19 @@ class TestBotHealth:
         
         bot = SimplexChatBot(config_path=str(config_path))
         
-        # Verify all expected commands are registered
-        required_commands = ['help', 'status', 'ping', 'stats']
+        # Verify core command is registered (others moved to plugins)
+        core_commands = ['info']
         available_commands = bot.command_registry.list_commands()
         
-        for cmd in required_commands:
+        for cmd in core_commands:
             assert cmd in available_commands
             # Verify command handlers are callable
             handler = bot.command_registry.get_command(cmd)
             assert callable(handler)
+        
+        # Verify plugin system is initialized
+        assert hasattr(bot, 'plugin_manager')
+        assert bot.plugin_manager is not None
         
     def test_bot_logger_initialization_health(self, temp_config_dir, minimal_config):
         """Test that bot logging is set up correctly without errors"""

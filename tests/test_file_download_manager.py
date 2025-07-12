@@ -66,7 +66,7 @@ class TestFileDownloadManager:
         
         # Test dangerous characters
         assert self.file_manager._sanitize_filename('../../../etc/passwd') == '______etc_passwd'
-        assert self.file_manager._sanitize_filename('file<>:|?"*.txt') == 'file_________.txt'
+        assert self.file_manager._sanitize_filename('file<>:|?"*.txt') == 'file_______.txt'
         
         # Test empty filename
         assert self.file_manager._sanitize_filename('') == 'unknown_file'

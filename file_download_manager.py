@@ -5,6 +5,7 @@ Handles all file and media download operations
 """
 
 import asyncio
+import copy
 import logging
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ class FileDownloadManager:
     
     def clean_content_for_logging(self, content: Dict[str, Any]) -> Dict[str, Any]:
         """Clean base64 data from content structure for safe logging"""
-        content_for_log = dict(content)
+        content_for_log = copy.deepcopy(content)
         if 'msgContent' in content_for_log and 'image' in content_for_log['msgContent']:
             image_data = content_for_log['msgContent']['image']
             if isinstance(image_data, str) and image_data.startswith('data:image/'):
@@ -193,7 +194,7 @@ class FileDownloadManager:
         filename = ''.join(char for char in filename if ord(char) >= 32)
         
         # Remove path separators and dangerous characters
-        forbidden_chars = ['/', '\\', '..', '~', '|', '&', ';', '`', '$', '<', '>', '"', "'"]
+        forbidden_chars = ['/', '\\', '..', '~', '|', '&', ';', '`', '$', '<', '>', '"', "'", ':', '?', '*']
         for char in forbidden_chars:
             filename = filename.replace(char, '_')
         
