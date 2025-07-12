@@ -11,7 +11,7 @@ A Python bot for SimpleX Chat with Docker support that can automatically process
 - **Command Line Interface**: Accept connections via CLI arguments
 - **Configuration Management**: YAML-based configuration with environment variables
 - **Docker Support**: Complete containerized setup with persistent storage
-- **Extensible Commands**: !help, !echo, !status, and custom command framework
+- **Extensible Commands**: !help and custom plugin framework
 
 ## Prerequisites
 
@@ -122,9 +122,7 @@ MAX_FILE_SIZE=104857600
 
 ### Available Commands
 
-- **!help** - Show available commands and bot information
-- **!echo <text>** - Echo back the provided text  
-- **!status** - Display bot status, server information, and connection details
+- **!help** - Show comprehensive help with bot information and all available plugin commands
 
 ### Command Line Options
 
@@ -226,17 +224,24 @@ SIMPLEX_BOT/
 Once the bot is updated, you can add commands by extending the framework:
 
 ```python  
-# In the updated bot implementation
-self.commands = {
-    "!help": self.handle_help,
-    "!echo": self.handle_echo, 
-    "!status": self.handle_status,
-    "!custom": self.handle_custom,  # Your command
-}
+# Create a custom plugin in plugins/external/
+from plugins.universal_plugin_base import UniversalBotPlugin, CommandContext
 
-async def handle_custom(self, contact_name: str, args: list = None) -> str:
-    """Handle custom command logic"""
-    return "Custom response"
+class CustomPlugin(UniversalBotPlugin):
+    def __init__(self):
+        super().__init__("custom")
+        self.version = "1.0.0"
+        self.description = "Custom plugin example"
+    
+    def get_commands(self):
+        return ["custom", "echo"]
+    
+    async def handle_command(self, context: CommandContext):
+        if context.command == "custom":
+            return f"Custom response from {context.platform.value}"
+        elif context.command == "echo":
+            return f"Echo: {context.args_raw}"
+        return None
 ```
 
 ## Troubleshooting

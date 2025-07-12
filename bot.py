@@ -137,10 +137,10 @@ class CommandRegistry:
     def _register_default_commands(self):
         """Register default bot commands"""
         self.commands = {
-            # Minimal core bot command for testing basic functionality
-            'info': self._info_command,
-            # Note: All other commands moved to plugins:
-            # - help, ping, status -> Core Plugin
+            # Core help command that integrates info functionality
+            'help': self._help_command,
+            # Note: Other commands moved to plugins:
+            # - ping, status, uptime, plugins, etc. -> Core Plugin
             # - invite, debug, contacts, groups, admin, reload_admin, stats -> SimpleX Plugin
         }
     
@@ -251,12 +251,13 @@ class CommandRegistry:
             self.logger.error(f"Error executing command {command_name}: {e}")
             return f"Error executing command: {command_name}"
     
-    async def _info_command(self, args: list, contact_name: str, send_message_callback):
-        """Basic bot info command for testing connectivity - reads from version.yml"""
+    async def _help_command(self, args: list, contact_name: str, send_message_callback):
+        """Comprehensive help command that includes bot info and all available commands"""
         import yaml
         from pathlib import Path
+        from datetime import datetime
         
-        # Read version info from version.yml - fail if not found
+        # Read version info from version.yml
         version_file = Path("version.yml")
         with open(version_file, 'r') as f:
             version_data = yaml.safe_load(f)
@@ -270,31 +271,58 @@ class CommandRegistry:
         # Check plugin system status
         plugin_status = '✅ Active' if hasattr(self.bot_instance, 'plugin_manager') else '❌ Not Available'
         plugin_count = 0
+        all_commands = {}
+        
         if hasattr(self.bot_instance, 'plugin_manager'):
             plugin_manager = getattr(self.bot_instance, 'plugin_manager')
             plugin_count = len(plugin_manager.plugins)
+            
+            # Get commands from all plugins
+            for plugin_name, plugin in plugin_manager.plugins.items():
+                if plugin.enabled:
+                    commands = plugin.get_commands()
+                    if commands:
+                        all_commands[plugin_name] = {
+                            'commands': commands,
+                            'description': plugin.description,
+                            'version': plugin.version
+                        }
         
-        info_text = f"""🤖 **{bot_name}**
+        # Start building help text with bot info
+        help_text = f"""🤖 **{bot_name} Help & Information**
 
-**Version:** {bot_version}
-**Platform:** {platform}
-**Status:** ✅ Running
-
-**Description:** {bot_description}
+**Bot Details:**
+• Version: {bot_version}
+• Platform: {platform} 
+• Status: ✅ Running
+• Description: {bot_description}
 
 **System Status:**
 • Plugin System: {plugin_status}
 • Loaded Plugins: {plugin_count}
-• Core Commands: 1 (info)
+• Total Commands: {sum(len(info['commands']) for info in all_commands.values()) + 1}
 
-**Getting Started:**
-• Use `!help` to see all available commands
-• Use `!plugins` to see loaded plugins
-• Use `!status` for detailed bot status
+**Core Commands:**
+• `!help` - Show this help and bot information
 
-This is the only core command. All other functionality is provided through plugins."""
+**Available Plugin Commands:**"""
+        
+        # Add plugin commands
+        for plugin_name, plugin_info in all_commands.items():
+            commands_str = ', '.join([f"`!{cmd}`" for cmd in plugin_info['commands']])
+            help_text += f"\n\n**{plugin_name.title()} Plugin** (v{plugin_info['version']}):\n"
+            help_text += f"*{plugin_info['description']}*\n"
+            help_text += f"Commands: {commands_str}"
+        
+        help_text += f"""
 
-        await send_message_callback(contact_name, info_text)
+**Tips:**
+• All commands start with `!`
+• Commands are case-sensitive
+• Use `!plugins` for detailed plugin status
+• Use `!status` for comprehensive bot information"""
+        
+        await send_message_callback(contact_name, help_text)
 
 
 class SimplexChatBot:
