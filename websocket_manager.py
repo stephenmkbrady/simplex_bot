@@ -385,7 +385,7 @@ class WebSocketManager:
             message_count = 0
             async for message in self.websocket:
                 message_count += 1
-                self.logger.info(f"🔊 HEARTBEAT: Received message #{message_count} on WebSocket {websocket_id}")
+                self.logger.debug(f"🔊 HEARTBEAT: Received message #{message_count} on WebSocket {websocket_id}")
                 
                 try:
                     data = json.loads(message)
@@ -446,8 +446,8 @@ class WebSocketManager:
                 heartbeat_count += 1
                 
                 # Basic heartbeat log
-                self.logger.info(f"💓 HEARTBEAT #{heartbeat_count}: Message listener alive on WebSocket {websocket_id}")
-                self.logger.info(f"📊 STATS: User messages: {self.user_message_count}, System messages: {self.system_message_count}")
+                self.logger.debug(f"💓 HEARTBEAT #{heartbeat_count}: Message listener alive on WebSocket {websocket_id}")
+                self.logger.debug(f"📊 STATS: User messages: {self.user_message_count}, System messages: {self.system_message_count}")
                 
                 # Check for CLI corruption every minute
                 if heartbeat_count % corruption_check_interval == 0:
@@ -459,7 +459,7 @@ class WebSocketManager:
                     break
                     
         except asyncio.CancelledError:
-            self.logger.info(f"💓 HEARTBEAT: Monitor cancelled for WebSocket {websocket_id}")
+            self.logger.debug(f"💓 HEARTBEAT: Monitor cancelled for WebSocket {websocket_id}")
         except Exception as e:
             self.logger.error(f"💓 HEARTBEAT ERROR: {type(e).__name__}: {e}")
     

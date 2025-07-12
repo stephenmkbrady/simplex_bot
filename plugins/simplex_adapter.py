@@ -6,7 +6,7 @@ between the universal plugin interface and SimpleX-specific functionality.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from .universal_plugin_base import BotAdapter, CommandContext, BotPlatform
@@ -71,6 +71,17 @@ class SimplexBotAdapter(BotAdapter):
         
         # Parse command from text
         text = msg_content.get('text', '').strip()
+        
+        # Debug logging
+        import logging
+        logger = logging.getLogger("simplex_adapter_debug")
+        logger.info(f"🔍 ADAPTER DEBUG: Raw text: {repr(text)}")
+        
+        # Handle escaped exclamation marks
+        if text.startswith('\\!'):
+            text = text[1:]  # Remove the backslash
+            logger.info(f"🔍 ADAPTER DEBUG: After removing backslash: {repr(text)}")
+        
         if not text.startswith('!'):
             # Not a command
             return CommandContext(
@@ -84,12 +95,17 @@ class SimplexBotAdapter(BotAdapter):
                 raw_message=platform_data
             )
         
-        # Parse command and arguments
+        # Parse command and arguments with proper quote handling
         command_text = text[1:]  # Remove ! prefix
-        parts = command_text.split()
+        logger.info(f"🔍 ADAPTER DEBUG: Command text: {repr(command_text)}")
+        parts = self._parse_command_args(command_text)
+        logger.info(f"🔍 ADAPTER DEBUG: Parsed parts: {parts}")
         command_name = parts[0] if parts else ""
         args = parts[1:] if len(parts) > 1 else []
-        args_raw = ' '.join(args)
+        # Preserve original raw arguments (without command name)
+        space_pos = command_text.find(' ')
+        args_raw = command_text[space_pos + 1:] if space_pos != -1 else ""
+        logger.info(f"🔍 ADAPTER DEBUG: Final - command='{command_name}', args={args}")
         
         return CommandContext(
             command=command_name,
@@ -101,6 +117,16 @@ class SimplexBotAdapter(BotAdapter):
             platform=BotPlatform.SIMPLEX,
             raw_message=platform_data
         )
+
+    def _parse_command_args(self, command_text: str) -> List[str]:
+        """Parse command arguments with proper handling of quoted strings"""
+        import shlex
+        try:
+            # Use shlex to properly handle quoted arguments
+            return shlex.split(command_text)
+        except ValueError:
+            # If shlex fails (e.g., unclosed quotes), fall back to simple split
+            return command_text.split()
     
     async def get_user_info(self, user_id: str) -> Dict[str, Any]:
         """Get SimpleX contact information"""
