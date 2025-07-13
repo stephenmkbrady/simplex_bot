@@ -62,9 +62,24 @@ class ConfigManager:
                 # Check if there's a default value
                 if ':-' in var_expr:
                     var_name, default_value = var_expr.split(':-', 1)
-                    return os.getenv(var_name.strip(), default_value)
+                    var_name = var_name.strip()
+                    
+                    # Handle malformed syntax - empty variable name
+                    if not var_name:
+                        return match.group(0)  # Return original malformed syntax
+                    
+                    env_value = os.getenv(var_name)
+                    # Use default if variable is None or empty string
+                    if env_value is None or env_value == '':
+                        return default_value
+                    return env_value
                 else:
                     var_name = var_expr.strip()
+                    
+                    # Handle malformed syntax - empty variable name
+                    if not var_name:
+                        return match.group(0)  # Return original malformed syntax
+                    
                     env_value = os.getenv(var_name)
                     if env_value is None:
                         logger.warning(f"Environment variable {var_name} not found")

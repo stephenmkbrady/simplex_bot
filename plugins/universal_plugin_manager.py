@@ -32,37 +32,37 @@ class UniversalPluginFileHandler(FileSystemEventHandler):
         self.logger = plugin_manager.logger
         
     def on_modified(self, event):
-        self.logger.info(f"🔔 File event received: {event.src_path}")
-        self.logger.info(f"🔔 Event is_directory: {event.is_directory}")
+        self.logger.debug(f"🔔 File event received: {event.src_path}")
+        self.logger.debug(f"🔔 Event is_directory: {event.is_directory}")
         
         if event.is_directory:
-            self.logger.info("🔔 Ignoring directory event")
+            self.logger.debug("🔔 Ignoring directory event")
             return
         
-        self.logger.info(f"🔔 Checking if file ends with 'plugin.py': {event.src_path.endswith('plugin.py')}")
+        self.logger.debug(f"🔔 Checking if file ends with 'plugin.py': {event.src_path.endswith('plugin.py')}")
         
         # Handle plugin file changes
         if event.src_path.endswith('plugin.py'):
-            self.logger.info(f"🔔 Plugin file modified: {event.src_path}")
+            self.logger.debug(f"🔔 Plugin file modified: {event.src_path}")
             
             # Debounce rapid file changes
             current_time = time.time()
             if event.src_path in self.last_modified:
                 time_diff = current_time - self.last_modified[event.src_path]
-                self.logger.info(f"🔔 Time since last modification: {time_diff:.2f}s (debounce: {self.debounce_time}s)")
+                self.logger.debug(f"🔔 Time since last modification: {time_diff:.2f}s (debounce: {self.debounce_time}s)")
                 if time_diff < self.debounce_time:
-                    self.logger.info("🔔 Ignoring due to debounce")
+                    self.logger.debug("🔔 Ignoring due to debounce")
                     return
             
             self.last_modified[event.src_path] = current_time
-            self.logger.info(f"🔔 Scheduling reload for: {event.src_path}")
+            self.logger.debug(f"🔔 Scheduling reload for: {event.src_path}")
             
             # Schedule reload in the main thread
             plugin_file = Path(event.src_path)
             self._schedule_reload(plugin_file)
             return
         else:
-            self.logger.info(f"🔔 Ignoring non-plugin file: {event.src_path}")
+            self.logger.debug(f"🔔 Ignoring non-plugin file: {event.src_path}")
     
     def on_deleted(self, event):
         if event.is_directory:
@@ -76,18 +76,18 @@ class UniversalPluginFileHandler(FileSystemEventHandler):
     
     def _schedule_reload(self, plugin_file: Path):
         """Schedule plugin reload in the main thread"""
-        self.logger.info(f"🗓️ Scheduling reload for: {plugin_file}")
-        self.logger.info(f"🗓️ Plugin manager loop: {self.plugin_manager.loop}")
+        self.logger.debug(f"🗓️ Scheduling reload for: {plugin_file}")
+        self.logger.debug(f"🗓️ Plugin manager loop: {self.plugin_manager.loop}")
         
         if self.plugin_manager.loop:
-            self.logger.info("🗓️ Submitting coroutine to event loop...")
+            self.logger.debug("🗓️ Submitting coroutine to event loop...")
             future = asyncio.run_coroutine_threadsafe(
                 self.plugin_manager._handle_file_change(plugin_file),
                 self.plugin_manager.loop
             )
-            self.logger.info(f"🗓️ Coroutine submitted: {future}")
+            self.logger.debug(f"🗓️ Coroutine submitted: {future}")
         else:
-            self.logger.error("🗓️ No event loop available for scheduling reload!")
+            self.logger.debug("🗓️ No event loop available for scheduling reload!")
     
     def _schedule_unload(self, plugin_file: Path):
         """Schedule plugin unload in the main thread"""
@@ -115,7 +115,7 @@ class UniversalPluginManager:
         # Ensure plugins directory exists
         self.plugins_dir.mkdir(exist_ok=True)
         
-        self.logger.info(f"🔌 Universal plugin manager initialized for directory: {self.plugins_dir}")
+        self.logger.debug(f"🔌 Universal plugin manager initialized for directory: {self.plugins_dir}")
         
     async def start_hot_reloading(self):
         """Start file system monitoring for hot reloading"""
@@ -128,42 +128,42 @@ class UniversalPluginManager:
             
             print(f"🔧 DEBUG: In start_hot_reloading try block")
             
-            self.logger.info(f"📁 Setting up hot reload for directory: {self.plugins_dir}")
+            self.logger.debug(f"📁 Setting up hot reload for directory: {self.plugins_dir}")
             print(f"📁 DEBUG: Setting up hot reload for directory: {self.plugins_dir}")
             
-            self.logger.info(f"📁 Absolute path: {self.plugins_dir.absolute()}")
+            self.logger.debug(f"📁 Absolute path: {self.plugins_dir.absolute()}")
             print(f"📁 DEBUG: Absolute path: {self.plugins_dir.absolute()}")
             
-            self.logger.info(f"📁 Directory exists: {self.plugins_dir.exists()}")
+            self.logger.debug(f"📁 Directory exists: {self.plugins_dir.exists()}")
             print(f"📁 DEBUG: Directory exists: {self.plugins_dir.exists()}")
             
             if self.plugins_dir.exists():
                 files = list(self.plugins_dir.rglob("*.py"))
-                self.logger.info(f"📁 Found {len(files)} Python files to watch")
+                self.logger.debug(f"📁 Found {len(files)} Python files to watch")
                 print(f"📁 DEBUG: Found {len(files)} Python files to watch")
                 for i, f in enumerate(files[:5]):  # Show first 5 files
-                    self.logger.info(f"   📄 {f}")
+                    self.logger.debug(f"   📄 {f}")
                     print(f"   📄 DEBUG: File {i+1}: {f}")
             
             self.loop = asyncio.get_event_loop()
-            self.logger.info("⏰ Event loop obtained")
+            self.logger.debug("⏰ Event loop obtained")
             print("⏰ DEBUG: Event loop obtained")
             
             self.file_handler = UniversalPluginFileHandler(self)
-            self.logger.info("📋 File handler created")
+            self.logger.debug("📋 File handler created")
             print("📋 DEBUG: File handler created")
             
             self.file_observer = Observer()
-            self.logger.info(f"👁️ Observer created: {type(self.file_observer)}")
+            self.logger.debug(f"👁️ Observer created: {type(self.file_observer)}")
             print(f"👁️ DEBUG: Observer created: {type(self.file_observer)}")
             
             observer_state = getattr(self.file_observer, '_state', 'unknown')
-            self.logger.info(f"👁️ Observer state: {observer_state}")
+            self.logger.debug(f"👁️ Observer state: {observer_state}")
             print(f"👁️ DEBUG: Observer state: {observer_state}")
             
             # Watch plugins directory for plugin changes
             watch_path = str(self.plugins_dir.absolute())
-            self.logger.info(f"📂 About to schedule watching of: {watch_path}")
+            self.logger.debug(f"📂 About to schedule watching of: {watch_path}")
             print(f"📂 DEBUG: About to schedule watching of: {watch_path}")
             
             watch = self.file_observer.schedule(
@@ -171,16 +171,16 @@ class UniversalPluginManager:
                 watch_path, 
                 recursive=True
             )
-            self.logger.info(f"📂 Scheduled watch object: {watch}")
+            self.logger.debug(f"📂 Scheduled watch object: {watch}")
             print(f"📂 DEBUG: Scheduled watch object: {watch}")
             
-            self.logger.info(f"📂 Watch path: {watch.path}")
+            self.logger.debug(f"📂 Watch path: {watch.path}")
             print(f"📂 DEBUG: Watch path: {watch.path}")
             
-            self.logger.info(f"📂 Watch recursive: {watch.is_recursive}")
+            self.logger.debug(f"📂 Watch recursive: {watch.is_recursive}")
             print(f"📂 DEBUG: Watch recursive: {watch.is_recursive}")
             
-            self.logger.info("🚀 Starting observer...")
+            self.logger.debug("🚀 Starting observer...")
             print("🚀 DEBUG: Starting observer...")
             
             self.file_observer.start()
@@ -188,10 +188,10 @@ class UniversalPluginManager:
             final_state = getattr(self.file_observer, '_state', 'unknown')
             is_alive = self.file_observer.is_alive()
             
-            self.logger.info(f"🚀 Observer started! State: {final_state}")
+            self.logger.debug(f"🚀 Observer started! State: {final_state}")
             print(f"🚀 DEBUG: Observer started! State: {final_state}")
             
-            self.logger.info(f"🚀 Observer is_alive: {is_alive}")
+            self.logger.debug(f"🚀 Observer is_alive: {is_alive}")
             print(f"🚀 DEBUG: Observer is_alive: {is_alive}")
             
             # Give it a moment to start
@@ -199,10 +199,10 @@ class UniversalPluginManager:
             time.sleep(0.1)
             
             final_final_state = getattr(self.file_observer, '_state', 'unknown')
-            self.logger.info(f"🚀 Observer final state: {final_final_state}")
+            self.logger.debug(f"🚀 Observer final state: {final_final_state}")
             print(f"🚀 DEBUG: Observer final state: {final_final_state}")
             
-            self.logger.info("🔥 Hot reloading enabled for plugins...")
+            self.logger.debug("🔥 Hot reloading enabled for plugins...")
             print("🔥 DEBUG: Hot reloading enabled for plugins...")
             
         except Exception as e:
@@ -223,12 +223,12 @@ class UniversalPluginManager:
         if self.file_observer:
             self.file_observer.stop()
             self.file_observer.join()
-            self.logger.info("🔥 Hot reloading stopped")
+            self.logger.debug("🔥 Hot reloading stopped")
     
     async def _handle_file_change(self, plugin_file: Path):
         """Handle plugin file modification"""
         plugin_name = plugin_file.parent.name
-        self.logger.info(f"🔥 Plugin file changed: {plugin_name}")
+        self.logger.debug(f"🔥 Plugin file changed: {plugin_name}")
         
         if plugin_name in self.plugins:
             # Reload existing plugin
@@ -240,7 +240,7 @@ class UniversalPluginManager:
     async def _handle_file_deletion(self, plugin_file: Path):
         """Handle plugin file deletion"""
         plugin_name = plugin_file.parent.name
-        self.logger.info(f"🗑️ Plugin file deleted: {plugin_name}")
+        self.logger.debug(f"🗑️ Plugin file deleted: {plugin_name}")
         
         if plugin_name in self.plugins:
             await self.unload_plugin(plugin_name)
@@ -335,7 +335,7 @@ class UniversalPluginManager:
     
     async def reload_plugin(self, plugin_name: str) -> bool:
         """Reload a specific plugin"""
-        self.logger.info(f"🔄 Reloading plugin: {plugin_name}")
+        self.logger.debug(f"🔄 Reloading plugin: {plugin_name}")
         
         # Find the plugin file in subfolder
         plugin_file = self.plugins_dir / plugin_name / "plugin.py"
@@ -351,7 +351,7 @@ class UniversalPluginManager:
         success = await self.load_plugin_from_file(plugin_file, plugin_name)
         
         if success:
-            self.logger.info(f"✅ Plugin {plugin_name} reloaded successfully")
+            self.logger.debug(f"✅ Plugin {plugin_name} reloaded successfully")
         else:
             self.logger.error(f"❌ Failed to reload plugin {plugin_name}")
         
@@ -382,7 +382,7 @@ class UniversalPluginManager:
         """Enable a specific plugin"""
         if plugin_name in self.plugins:
             self.plugins[plugin_name].enabled = True
-            self.logger.info(f"✅ Enabled plugin: {plugin_name}")
+            self.logger.debug(f"✅ Enabled plugin: {plugin_name}")
             return True
         return False
     
@@ -390,7 +390,7 @@ class UniversalPluginManager:
         """Disable a specific plugin"""
         if plugin_name in self.plugins:
             self.plugins[plugin_name].enabled = False
-            self.logger.info(f"⏸️ Disabled plugin: {plugin_name}")
+            self.logger.debug(f"⏸️ Disabled plugin: {plugin_name}")
             return True
         return False
 

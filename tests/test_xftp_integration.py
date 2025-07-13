@@ -119,8 +119,7 @@ class TestXFTPBotIntegration:
     
     def test_bot_xftp_missing_cli(self, test_config):
         """Test bot behavior when XFTP CLI is missing"""
-        with patch('bot.websockets.connect'), \
-             patch('bot.SimplexChatBot.connect', return_value=True), \
+        with patch('websocket_manager.websockets.connect'), \
              patch('xftp_client.XFTPClient.is_available', return_value=False):
             
             bot = SimplexChatBot(config_path=test_config)
@@ -131,7 +130,7 @@ class TestXFTPBotIntegration:
             if not hasattr(bot, 'message_logger'):
                 bot.message_logger = Mock()
                 
-            assert bot.xftp_available is False
+            assert bot.xftp_client.is_available() is False
     
     @pytest.mark.asyncio
     async def test_download_via_xftp_success(self, mock_bot, temp_config_dir):

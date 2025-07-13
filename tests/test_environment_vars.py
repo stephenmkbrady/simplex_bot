@@ -237,8 +237,8 @@ EMPTY_VAR=
             assert config_manager.get('var1') == 'value1'
             assert config_manager.get('var2') == 'value2'
             assert config_manager.get('var3') == 'value with spaces'
-            assert config_manager.get('var4') == '"quoted value"'
-            assert config_manager.get('var5') == "'single quoted'"
+            assert config_manager.get('var4') == 'quoted value'  # python-dotenv strips quotes
+            assert config_manager.get('var5') == 'single quoted'  # python-dotenv strips quotes
             assert config_manager.get('empty') == 'default'  # Empty var should use default
         finally:
             os.chdir(original_cwd)

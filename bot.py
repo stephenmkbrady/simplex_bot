@@ -455,12 +455,12 @@ class SimplexChatBot:
                 self.logger.info("Plugins loaded successfully")
                 
                 # Start hot reload monitoring
-                self.logger.info("🔧 Starting hot reload monitoring...")
+                self.logger.debug("🔧 Starting hot reload monitoring...")
                 print("🔧 DEBUG: About to call start_hot_reloading()")
                 try:
                     await self.plugin_manager.start_hot_reloading()
                     print("🔧 DEBUG: start_hot_reloading() completed successfully")
-                    self.logger.info("✅ Hot reload monitoring started successfully")
+                    self.logger.debug("✅ Hot reload monitoring started successfully")
                 except Exception as e:
                     print(f"🔧 DEBUG: start_hot_reloading() failed: {e}")
                     import traceback

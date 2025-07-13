@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from message_handler import MessageHandler
 from file_download_manager import FileDownloadManager
 from bot import CommandRegistry
+from admin_manager import AdminManager
 
 
 class TestMessageHandler:
@@ -146,8 +147,10 @@ class TestMessageHandlerIntegration:
         logger = logging.getLogger('test')
         message_logger = logging.getLogger('test_messages')
         
-        # Create real command registry
-        command_registry = CommandRegistry(logger)
+        # Create real command registry with admin manager
+        admin_manager = MagicMock(spec=AdminManager)
+        admin_manager.can_run_command.return_value = True  # Allow all commands for testing
+        command_registry = CommandRegistry(logger, admin_manager)
         
         # Mock other dependencies
         file_download_manager = MagicMock(spec=FileDownloadManager)
