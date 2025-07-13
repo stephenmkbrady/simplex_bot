@@ -385,11 +385,18 @@ class SimplexChatBot:
         
         # Initialize file download manager
         media_config = self.config.get('media', {})
+        self.logger.info(f"📁 INIT DEBUG: Media config from bot.yml: {media_config}")
+        
         self.file_download_manager = FileDownloadManager(
             media_config=media_config,
             xftp_client=self.xftp_client,
             logger=self.logger
         )
+        
+        self.logger.info(f"📁 INIT DEBUG: FileDownloadManager initialized")
+        self.logger.info(f"📁 INIT DEBUG: Media enabled: {self.file_download_manager.media_enabled}")
+        self.logger.info(f"📁 INIT DEBUG: Media path: {self.file_download_manager.media_path}")
+        self.logger.info(f"📁 INIT DEBUG: Media config used: {self.file_download_manager.media_config}")
         
         # Initialize WebSocket manager
         websocket_url = self.config.get('websocket_url', 'ws://localhost:3030')
@@ -421,6 +428,7 @@ class SimplexChatBot:
         self.websocket_manager.register_message_handler('contactConnected', self._handle_contact_connected)
         self.websocket_manager.register_message_handler('receivedGroupInvitation', self._handle_group_invitation)
         self.websocket_manager.register_message_handler('memberJoinedGroup', self._handle_member_joined_group)
+        self.websocket_manager.register_message_handler('rcvFileDescrReady', self._handle_file_descriptor_ready)
     
     def _initialize_plugin_system(self):
         """Initialize the universal plugin system"""
@@ -746,6 +754,16 @@ class SimplexChatBot:
                 
         except Exception as e:
             self.logger.error(f"Error handling member joined group: {e}")
+
+    async def _handle_file_descriptor_ready(self, response_data: Dict[str, Any]):
+        """Handle rcvFileDescrReady event - delegate to message handler"""
+        try:
+            self.logger.info("🎯 BOT: Received rcvFileDescrReady event, delegating to message handler")
+            await self.message_handler.handle_file_descriptor_ready(response_data)
+        except Exception as e:
+            self.logger.error(f"Error handling file descriptor ready event: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
 
 
 def parse_arguments():
