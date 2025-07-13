@@ -22,13 +22,15 @@ class SimplexBotAdapter(BotAdapter):
         self.bot_instance = simplex_bot
     
     async def send_message(self, message: str, context: CommandContext) -> bool:
-        """Send a message back to the SimpleX contact"""
+        """Send a message back to the correct chat (group or direct)"""
         try:
-            await self.bot.websocket_manager.send_message(context.user_display_name, message)
-            self.logger.debug(f"Sent message to {context.user_display_name}: {message[:100]}...")
+            # Use chat_id for the destination - this will be the group name for group chats,
+            # or the contact name for direct chats
+            await self.bot.websocket_manager.send_message(context.chat_id, message)
+            self.logger.debug(f"Sent message to {context.chat_id}: {message[:100]}...")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to send message to {context.user_display_name}: {e}")
+            self.logger.error(f"Failed to send message to {context.chat_id}: {e}")
             return False
     
     async def send_file(self, file_path: str, context: CommandContext, caption: str = "") -> bool:
@@ -65,6 +67,14 @@ class SimplexBotAdapter(BotAdapter):
         contact_info = chat_info.get('contact', {})
         contact_name = contact_info.get('localDisplayName', 'Unknown')
         
+        # Determine chat_id based on chat type (group vs direct)
+        chat_type = chat_info.get("type", "direct")
+        if chat_type == "group":
+            group_info = chat_info.get("groupInfo", {})
+            chat_id = group_info.get("localDisplayName", group_info.get("groupName", contact_name))
+        else:
+            chat_id = contact_name
+        
         # Get message content
         content = chat_item.get('content', {})
         msg_content = content.get('msgContent', {})
@@ -89,7 +99,7 @@ class SimplexBotAdapter(BotAdapter):
                 args=[],
                 args_raw="",
                 user_id=contact_name,
-                chat_id=contact_name,  # SimpleX uses contact names as chat IDs
+                chat_id=chat_id,
                 user_display_name=contact_name,
                 platform=BotPlatform.SIMPLEX,
                 raw_message=platform_data
@@ -112,7 +122,7 @@ class SimplexBotAdapter(BotAdapter):
             args=args,
             args_raw=args_raw,
             user_id=contact_name,
-            chat_id=contact_name,
+            chat_id=chat_id,
             user_display_name=contact_name,
             platform=BotPlatform.SIMPLEX,
             raw_message=platform_data

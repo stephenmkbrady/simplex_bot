@@ -195,33 +195,39 @@ class CommandRegistry:
         # First try plugin manager if available
         if plugin_manager:
             try:
-                from plugins.universal_plugin_base import CommandContext, BotPlatform
-                # Handle both direct and group chat contexts
-                if message_data:
-                    chat_info = message_data.get("chatInfo", {})
-                    chat_type = chat_info.get("chatType", "direct")
-                    
-                    if chat_type == "group":
-                        group_info = chat_info.get("groupInfo", {})
-                        chat_id = group_info.get("groupName", contact_name)
-                    else:
-                        chat_id = contact_name
-                        
-                    raw_message = message_data
+                # Use the adapter's normalize_context method to create proper context
+                if hasattr(plugin_manager, 'adapter') and plugin_manager.adapter:
+                    # Create a fake message structure that normalize_context expects
+                    fake_message_data = {
+                        'chatInfo': message_data.get('chatInfo', {}),
+                        'chatItem': {
+                            'content': {
+                                'msgContent': {
+                                    'text': f"!{command_name} {' '.join(args)}"
+                                }
+                            }
+                        }
+                    }
+                    context = plugin_manager.adapter.normalize_context(fake_message_data)
                 else:
-                    chat_id = contact_name
-                    raw_message = {}
-                
-                context = CommandContext(
-                    command=command_name,
-                    args=args,
-                    args_raw=' '.join(args),
-                    user_id=contact_name,
-                    chat_id=chat_id,
-                    user_display_name=contact_name,
-                    platform=BotPlatform.SIMPLEX,
-                    raw_message=raw_message
-                )
+                    # Fallback to original method if adapter not available
+                    from plugins.universal_plugin_base import CommandContext, BotPlatform
+                    chat_id = contact_name  # Fallback to contact name
+                    if message_data:
+                        raw_message = message_data
+                    else:
+                        raw_message = {}
+                    
+                    context = CommandContext(
+                        command=command_name,
+                        args=args,
+                        args_raw=' '.join(args),
+                        user_id=contact_name,
+                        chat_id=chat_id,
+                        user_display_name=contact_name,
+                        platform=BotPlatform.SIMPLEX,
+                        raw_message=raw_message
+                    )
                 
                 plugin_result = await plugin_manager.handle_command(context)
                 if plugin_result is not None:
