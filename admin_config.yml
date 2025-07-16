@@ -1,26 +1,31 @@
 admins:
-  admin1:
+  NonpareilMagnitude:
     commands:
     - '*'
     description: Main administrator with full access
-  admin2:
+  TestUser:
+    commands:
+    - '*'
+    description: Test user for automated testing
+  cosmic:
+    commands:
+    - '*'
+    description: Admin added at runtime
+  cosmic2:
     commands:
     - '*'
     description: Admin added at runtime
 public_commands:
 - help
 - status
-- ping
-- stats
-- admin
-- reload_admin
-- invite
 - contacts
-- groups
-- debug
 - youtube
 - yt
+- plugins
+- commands
+- groups
+- debug
 settings:
   admin_only_mode: false
   default_deny_message: Access denied. You need admin permissions to use this command.
-  require_admin_for_plugins: true
+  require_admin_for_plugins: false

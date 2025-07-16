@@ -32,6 +32,54 @@ class MessageHandler:
         # Constants
         self.MESSAGE_PREVIEW_LENGTH = 100
     
+    def _determine_chat_routing(self, message_data: Dict[str, Any], contact_name: str) -> str:
+        """Determine the correct chat ID for routing messages based on message context"""
+        try:
+            # Handle different event structures
+            chat_info = None
+            
+            # Check for regular message structure
+            if "chatInfo" in message_data:
+                chat_info = message_data["chatInfo"]
+                self.logger.debug(f"🔄 ROUTING: Using regular message structure")
+            
+            # Check for XFTP event structure
+            elif "chatItem" in message_data:
+                chat_item = message_data["chatItem"]
+                chat_info = chat_item.get("chatInfo", {})
+                self.logger.debug(f"🔄 ROUTING: Using XFTP event structure")
+            
+            if not chat_info:
+                self.logger.warning(f"🔄 ROUTING: No chat info found in message data, using contact fallback")
+                return contact_name
+            
+            # Check if this is a group message
+            if "groupInfo" in chat_info:
+                # Group message - route to group
+                group_info = chat_info.get("groupInfo", {})
+                group_name = group_info.get("localDisplayName", group_info.get("groupName", contact_name))
+                self.logger.debug(f"🔄 ROUTING: Group message - routing to group: {group_name}")
+                return group_name
+            else:
+                # Direct message - route to contact
+                self.logger.debug(f"🔄 ROUTING: Direct message - routing to contact: {contact_name}")
+                return contact_name
+                
+        except Exception as e:
+            self.logger.error(f"🔄 ROUTING: Error determining chat routing: {e}")
+            # Fallback to contact name
+            return contact_name
+    
+    async def send_routed_message(self, message_data: Dict[str, Any], contact_name: str, message: str) -> None:
+        """Send a message using proper routing logic (group vs direct chat)"""
+        try:
+            chat_id = self._determine_chat_routing(message_data, contact_name)
+            await self.send_message_callback(chat_id, message)
+        except Exception as e:
+            self.logger.error(f"🔄 ROUTING: Error sending routed message: {e}")
+            # Fallback to direct contact
+            await self.send_message_callback(contact_name, message)
+    
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """Process an incoming message and handle commands"""
         try:
@@ -101,7 +149,7 @@ class MessageHandler:
                 # Handle link messages (treat similar to text for commands)
                 await self._handle_text_message(contact_name, content, chat_context, message_data)
             elif msg_type in ["file", "image", "video", "audio", "media", "attachment"]:
-                await self._handle_file_message(contact_name, content, msg_type, chat_context)
+                await self._handle_file_message(contact_name, content, msg_type, chat_context, message_data)
             elif msg_type == "voice":
                 await self._handle_voice_message(contact_name, content, chat_context, message_data)
             else:
@@ -136,27 +184,18 @@ class MessageHandler:
             
             result = await self.command_registry.execute_command(text, contact_name, plugin_manager, message_data)
             if result:
-                # For groups, we need to send to the group, not the individual contact
-                chat_info = message_data.get("chatInfo", {})
-                
-                # Use same logic as above to detect group vs direct
-                if "groupInfo" in chat_info:
-                    # Send to group - we need the group name for this
-                    group_info = chat_info.get("groupInfo", {})
-                    group_name = group_info.get("localDisplayName", group_info.get("groupName", "Unknown Group"))
-                    await self.send_message_callback(group_name, result)
-                    self.message_logger.info(f"TO Group '{group_name}': {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
-                else:
-                    # Send to direct contact
-                    await self.send_message_callback(contact_name, result)
+                # Use common routing logic
+                chat_id = self._determine_chat_routing(message_data, contact_name)
+                await self.send_message_callback(chat_id, result)
+                self.message_logger.info(f"TO {chat_id}: {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
         except Exception as e:
             self.logger.error(f"Error executing command: {e}")
             error_msg = f"Error processing command"
-            await self.send_message_callback(contact_name, error_msg)
+            await self.send_routed_message(message_data, contact_name, error_msg)
     
     async def _handle_voice_message(self, contact_name: str, content: Dict[str, Any], chat_context: str, message_data: Dict[str, Any]) -> None:
         """Handle voice messages with STT integration"""
-        self.logger.info(f"🎤 VOICE DEBUG: Voice message detected from {contact_name}")
+        self.logger.debug(f"🎤 VOICE DEBUG: Voice message detected from {contact_name}")
         
         try:
             # Extract voice message info from message structure
@@ -164,9 +203,9 @@ class MessageHandler:
             file_info = chat_item.get("file", {})
             msg_content = content.get("msgContent", {})
             
-            self.logger.info(f"🎤 VOICE DEBUG: Chat item keys: {list(chat_item.keys())}")
-            self.logger.info(f"🎤 VOICE DEBUG: File info keys: {list(file_info.keys()) if file_info else 'None'}")
-            self.logger.info(f"🎤 VOICE DEBUG: Full file info: {file_info}")
+            self.logger.debug(f"🎤 VOICE DEBUG: Chat item keys: {list(chat_item.keys())}")
+            self.logger.debug(f"🎤 VOICE DEBUG: File info keys: {list(file_info.keys()) if file_info else 'None'}")
+            self.logger.debug(f"🎤 VOICE DEBUG: Full file info: {file_info}")
             
             if not file_info:
                 self.logger.warning("🎤 VOICE DEBUG: Voice message has no file information")
@@ -179,80 +218,31 @@ class MessageHandler:
             file_protocol = file_info.get("fileProtocol", "unknown")
             duration = msg_content.get("duration", 0)
             
-            self.logger.info(f"🎤 VOICE DEBUG: File name: {file_name}")
-            self.logger.info(f"🎤 VOICE DEBUG: File size: {file_size} bytes")
-            self.logger.info(f"🎤 VOICE DEBUG: File status: {file_status}")
-            self.logger.info(f"🎤 VOICE DEBUG: File protocol: {file_protocol}")
-            self.logger.info(f"🎤 VOICE DEBUG: Duration: {duration}s")
+            self.logger.debug(f"🎤 VOICE DEBUG: File name: {file_name}")
+            self.logger.debug(f"🎤 VOICE DEBUG: File size: {file_size} bytes")
+            self.logger.debug(f"🎤 VOICE DEBUG: File status: {file_status}")
+            self.logger.debug(f"🎤 VOICE DEBUG: File protocol: {file_protocol}")
+            self.logger.debug(f"🎤 VOICE DEBUG: Duration: {duration}s")
             
             self.logger.info(f"Voice message: {file_name} ({file_size} bytes, {duration}s duration)")
             self.message_logger.info(f"VOICE FROM {contact_name}: {file_name} ({duration}s)")
             
             # Check media download status
-            self.logger.info(f"🎤 VOICE DEBUG: Media downloads enabled: {self.file_download_manager.media_enabled}")
+            self.logger.debug(f"🎤 VOICE DEBUG: Media downloads enabled: {self.file_download_manager.media_enabled}")
             if not self.file_download_manager.media_enabled:
                 self.logger.warning("🎤 VOICE DEBUG: Media downloads disabled - voice files cannot be downloaded for STT")
             
-            # Check if we have a plugin manager with STT plugin
-            if hasattr(self, '_bot_instance'):
-                bot_instance = self._bot_instance
-                if hasattr(bot_instance, 'plugin_manager'):
-                    plugin_manager = bot_instance.plugin_manager
-                    
-                    # Look for STT plugin
-                    stt_plugin = None
-                    for plugin in plugin_manager.plugins.values():
-                        if hasattr(plugin, 'handle_audio_message') and plugin.name == 'stt_wyoming':
-                            stt_plugin = plugin
-                            break
-                    
-                    if stt_plugin:
-                        self.logger.info("Found STT plugin, processing voice message...")
-                        
-                        # Create context for the STT plugin
-                        # Use same logic as _process_command to determine chat target
-                        chat_info = message_data.get("chatInfo", {})
-                        if "groupInfo" in chat_info:
-                            # Group message - need group context
-                            group_info = chat_info.get("groupInfo", {})
-                            group_name = group_info.get("localDisplayName", group_info.get("groupName", "Unknown Group"))
-                            chat_id = group_name
-                        else:
-                            # Direct message
-                            chat_id = contact_name
-                        
-                        # Create command context for STT plugin
-                        from plugins.universal_plugin_base import CommandContext, BotPlatform
-                        context = CommandContext(
-                            command="auto_transcribe",
-                            args=[],
-                            args_raw="",
-                            user_id=contact_name,
-                            user_display_name=contact_name,
-                            chat_id=chat_id,
-                            platform=BotPlatform.SIMPLEX,
-                            raw_message=message_data
-                        )
-                        
-                        # Process the voice message with STT plugin
-                        await stt_plugin.handle_audio_message(file_info, context)
-                    else:
-                        self.logger.info("No STT plugin found, acknowledging voice message")
-                        await self.send_message_callback(contact_name, f"🎤 Voice message received: {file_name} ({duration}s)")
-                else:
-                    self.logger.info("No plugin manager available")
-                    await self.send_message_callback(contact_name, f"🎤 Voice message received: {file_name} ({duration}s)")
-            else:
-                self.logger.info("No bot instance available for plugin integration")
-                await self.send_message_callback(contact_name, f"🎤 Voice message received: {file_name} ({duration}s)")
+            # Voice message acknowledged - STT processing will happen after XFTP download completes
+            self.logger.info("Voice message acknowledged - STT will process after XFTP download")
+            # No need to acknowledge voice messages since STT will handle this after download
                 
         except Exception as e:
             self.logger.error(f"Error handling voice message: {e}")
             import traceback
             self.logger.error(f"Voice message error traceback: {traceback.format_exc()}")
-            await self.send_message_callback(contact_name, "Error processing voice message")
+            await self.send_routed_message(message_data, contact_name, "Error processing voice message")
 
-    async def _handle_file_message(self, contact_name: str, content: Dict[str, Any], msg_type: str, chat_context: str) -> None:
+    async def _handle_file_message(self, contact_name: str, content: Dict[str, Any], msg_type: str, chat_context: str, message_data: Dict[str, Any]) -> None:
         """Handle file/media messages"""
         self.logger.info(f"📁 DOWNLOAD DEBUG: File message detected: {msg_type}")
         
@@ -288,7 +278,7 @@ class MessageHandler:
                 max_size = parse_file_size(self.file_download_manager.media_config.get('max_file_size', '100MB'))
                 self.logger.warning(f"📁 DOWNLOAD DEBUG: File validation failed - size: {file_size}, max: {max_size}")
                 if file_size > max_size:
-                    await self.send_message_callback(contact_name, f"File {file_name} is too large to download")
+                    await self.send_routed_message(message_data, contact_name, f"File {file_name} is too large to download")
                 return
             
             # Log the file message
@@ -301,22 +291,22 @@ class MessageHandler:
             
             if download_success == "acknowledged":
                 self.logger.info(f"📁 DOWNLOAD DEBUG: Video/audio message acknowledged - waiting for XFTP file description: {file_name}")
-                await self.send_message_callback(contact_name, f"📹 Video received - downloading via XFTP...")
+                await self.send_routed_message(message_data, contact_name, f"📹 Video received - downloading via XFTP...")
             elif download_success == "thumbnail_skipped":
                 self.logger.info(f"📁 DOWNLOAD DEBUG: Thumbnail skipped for {file_name} - waiting for XFTP")
                 # No message sent - wait for XFTP download
             elif download_success:
                 self.logger.info(f"📁 DOWNLOAD DEBUG: Successfully downloaded file: {file_name}")
-                await self.send_message_callback(contact_name, f"✓ Downloaded: {file_name}")
+                await self.send_routed_message(message_data, contact_name, f"✓ Downloaded: {file_name}")
             else:
                 self.logger.error(f"📁 DOWNLOAD DEBUG: Failed to download file: {file_name}")
-                await self.send_message_callback(contact_name, f"✗ Failed to download: {file_name}")
+                await self.send_routed_message(message_data, contact_name, f"✗ Failed to download: {file_name}")
             
         except Exception as e:
             self.logger.error(f"📁 DOWNLOAD DEBUG: Error handling file message: {e}")
             import traceback
             self.logger.error(f"📁 DOWNLOAD DEBUG: Traceback: {traceback.format_exc()}")
-            await self.send_message_callback(contact_name, f"Error processing file: {str(e)}")
+            await self.send_routed_message(message_data, contact_name, f"Error processing file: {str(e)}")
 
     async def _download_file(self, contact_name: str, file_info: Dict, file_type: str, inner_msg_type: str = "file") -> bool:
         """Download file using available methods (direct data or XFTP)"""
@@ -509,22 +499,22 @@ class MessageHandler:
             contact_name = "unknown_contact"
             
             # Log the full data structure to debug contact extraction
-            self.logger.info(f"🎯 XFTP DEBUG: Full event data structure:")
+            self.logger.debug(f"🎯 XFTP DEBUG: Full event data structure:")
             for key, value in data.items():
                 if key not in ['rcvFileDescr', 'rcvFileTransfer']:  # Skip large XFTP data
-                    self.logger.info(f"🎯 XFTP DEBUG:   {key}: {value}")
+                    self.logger.debug(f"🎯 XFTP DEBUG:   {key}: {value}")
             
             # Try multiple sources for contact info
             if "chatItem" in data:
                 chat_item = data["chatItem"]
-                self.logger.info(f"🎯 XFTP DEBUG: chatItem keys: {list(chat_item.keys())}")
+                self.logger.debug(f"🎯 XFTP DEBUG: chatItem keys: {list(chat_item.keys())}")
                 chat_info = chat_item.get("chatInfo", {})
-                self.logger.info(f"🎯 XFTP DEBUG: chatInfo: {chat_info}")
+                self.logger.debug(f"🎯 XFTP DEBUG: chatInfo: {chat_info}")
                 
                 # Check if it's a direct contact
                 if "contact" in chat_info:
                     contact_name = chat_info["contact"].get("localDisplayName", "unknown_contact")
-                    self.logger.info(f"🎯 XFTP: Found contact name from chatItem.chatInfo.contact: {contact_name}")
+                    self.logger.debug(f"🎯 XFTP: Found contact name from chatItem.chatInfo.contact: {contact_name}")
                 
                 # Check if it's a group message
                 elif "groupInfo" in chat_info:
@@ -534,18 +524,18 @@ class MessageHandler:
                     group_member = chat_dir.get("groupMember", {})
                     if group_member:
                         contact_name = group_member.get("localDisplayName", "unknown_contact")
-                        self.logger.info(f"🎯 XFTP: Found contact name from chatItem.chatItem.chatDir.groupMember: {contact_name}")
+                        self.logger.debug(f"🎯 XFTP: Found contact name from chatItem.chatItem.chatDir.groupMember: {contact_name}")
                     else:
                         self.logger.warning(f"🎯 XFTP: Group message but no groupMember found in chatDir: {chat_dir}")
             
             # Fallback: try user field
             if contact_name == "unknown_contact" and "user" in data:
                 user_info = data["user"]
-                self.logger.info(f"🎯 XFTP DEBUG: user field: {user_info}")
+                self.logger.debug(f"🎯 XFTP DEBUG: user field: {user_info}")
                 contact_name = user_info.get("localDisplayName", user_info.get("displayName", "unknown_contact"))
-                self.logger.info(f"🎯 XFTP: Found contact name from user field: {contact_name}")
+                self.logger.debug(f"🎯 XFTP: Found contact name from user field: {contact_name}")
             
-            self.logger.info(f"🎯 XFTP: Final contact name: {contact_name}")
+            self.logger.debug(f"🎯 XFTP: Final contact name: {contact_name}")
             
             # Parse file information from description text
             file_size = self._parse_xftp_file_size(file_descr_text)
@@ -569,10 +559,13 @@ class MessageHandler:
             if download_result:
                 actual_filename, actual_path = download_result
                 self.logger.info(f"🎯 XFTP: File download successful: {actual_filename} at {actual_path}")
-                await self.send_message_callback(contact_name, f"✓ Downloaded via XFTP: {actual_filename}")
+                await self.send_routed_message(data, contact_name, f"✓ Downloaded via XFTP: {actual_filename}")
+                
+                # Check if this is an audio file and trigger STT processing
+                await self._maybe_trigger_stt_processing(actual_filename, actual_path, contact_name, data)
             else:
                 self.logger.error(f"🎯 XFTP: File download failed: {temp_file_name}")
-                await self.send_message_callback(contact_name, f"✗ XFTP download failed")
+                await self.send_routed_message(data, contact_name, f"✗ XFTP download failed")
                 
         except Exception as e:
             self.logger.error(f"🎯 XFTP: Error handling file descriptor ready: {e}")
@@ -674,5 +667,81 @@ class MessageHandler:
         except Exception as e:
             self.logger.error(f"Error parsing XFTP file size: {e}")
             return 0
+
+    async def _maybe_trigger_stt_processing(self, filename: str, file_path: str, contact_name: str, xftp_data: Dict):
+        """Trigger STT processing if this is an audio file that was just downloaded"""
+        try:
+            # Check if this is an audio file
+            audio_extensions = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'}
+            file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+            
+            if f'.{file_ext}' not in audio_extensions:
+                self.logger.debug(f"🎤 STT: File {filename} is not an audio file, skipping STT")
+                return
+            
+            self.logger.info(f"🎤 STT: Audio file {filename} downloaded, triggering STT processing")
+            
+            # Check if we have a plugin manager with STT plugin
+            if hasattr(self, '_bot_instance') and hasattr(self._bot_instance, 'plugin_manager'):
+                plugin_manager = self._bot_instance.plugin_manager
+                
+                # Look for STT plugin
+                stt_plugin = None
+                for plugin in plugin_manager.plugins.values():
+                    if hasattr(plugin, 'handle_downloaded_audio') and plugin.name == 'stt_openai':
+                        stt_plugin = plugin
+                        break
+                
+                if stt_plugin:
+                    self.logger.debug(f"🎤 STT: Found STT plugin, processing downloaded audio file: {filename}")
+                    
+                    # Create context for the STT plugin based on XFTP event data
+                    # Use common routing logic to determine correct chat destination
+                    chat_id = self._determine_chat_routing(xftp_data, contact_name)
+                    
+                    # Create file info for STT plugin
+                    audio_info = {
+                        'fileName': filename,
+                        'fileSize': 0,  # Size not critical for downloaded file
+                        'filePath': file_path  # Add the actual path
+                    }
+                    
+                    # Create command context for STT plugin
+                    from plugins.universal_plugin_base import CommandContext, BotPlatform
+                    context = CommandContext(
+                        command="auto_transcribe_downloaded",
+                        args=[],
+                        args_raw="",
+                        user_id=contact_name,
+                        user_display_name=contact_name,
+                        chat_id=chat_id,
+                        platform=BotPlatform.SIMPLEX,
+                        raw_message=xftp_data
+                    )
+                    
+                    # Process the downloaded audio file with STT plugin
+                    # The STT plugin expects: handle_downloaded_audio(filename, file_path, user_name, chat_id)
+                    result = await stt_plugin.handle_downloaded_audio(filename, file_path, contact_name, chat_id)
+                    
+                    if result:
+                        self.logger.info(f"🎤 STT: Transcription completed for {filename}")
+                        
+                        # Send the transcription result to the chat
+                        try:
+                            await self.send_message_callback(chat_id, result)
+                            self.logger.info(f"🎤 STT: Transcription sent to chat: {chat_id}")
+                        except Exception as e:
+                            self.logger.error(f"🎤 STT: Failed to send transcription to chat: {e}")
+                    else:
+                        self.logger.warning(f"🎤 STT: Transcription failed for {filename}")
+                else:
+                    self.logger.debug("🎤 STT: No STT plugin found")
+            else:
+                self.logger.debug("🎤 STT: No plugin manager available")
+                
+        except Exception as e:
+            self.logger.error(f"🎤 STT: Error triggering STT processing: {e}")
+            import traceback
+            self.logger.error(f"🎤 STT: Traceback: {traceback.format_exc()}")
 
 

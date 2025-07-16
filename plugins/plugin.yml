@@ -1,0 +1,27 @@
+# Plugin Configuration
+# Set enabled: false to disable a plugin
+
+plugins:
+  core:
+    enabled: true
+  
+  ai:
+    enabled: true
+  
+  auth:
+    enabled: false
+  
+  database:
+    enabled: false
+  
+  example:
+    enabled: false  # Example plugin disabled by default
+  
+  homeassistant:
+    enabled: true
+  
+  stt_openai:
+    enabled: true  # STT plugin using OpenAI Whisper
+  
+  youtube:
+    enabled: true

@@ -117,6 +117,39 @@ class UniversalPluginManager:
         
         self.logger.debug(f"🔌 Universal plugin manager initialized for directory: {self.plugins_dir}")
         
+    def load_plugin_config(self) -> Dict[str, Dict[str, any]]:
+        """Load plugin configuration from plugin.yml"""
+        import yaml
+        
+        config_file = self.plugins_dir.parent / "plugin.yml"
+        if not config_file.exists():
+            self.logger.info("No plugin.yml found, all plugins enabled by default")
+            return {}
+        
+        try:
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            plugins_config = config.get('plugins', {})
+            self.logger.info(f"📋 Loaded plugin configuration: {len(plugins_config)} plugins configured")
+            return plugins_config
+        except Exception as e:
+            self.logger.error(f"❌ Failed to load plugin configuration: {e}")
+            return {}
+    
+    def is_plugin_enabled(self, plugin_name: str, config: Dict[str, Dict[str, any]]) -> bool:
+        """Check if a plugin is enabled in configuration"""
+        if not config:
+            return True  # Default to enabled if no config
+        
+        plugin_config = config.get(plugin_name, {})
+        enabled = plugin_config.get('enabled', True)  # Default to enabled
+        
+        if not enabled:
+            self.logger.info(f"🚫 Plugin '{plugin_name}' disabled by configuration")
+        
+        return enabled
+        
     async def start_hot_reloading(self):
         """Start file system monitoring for hot reloading"""
         # Use print for debugging since async logging might have issues
@@ -250,16 +283,30 @@ class UniversalPluginManager:
         self.adapter = adapter
         results = {}
         
+        # Load plugin configuration
+        plugin_config = self.load_plugin_config()
+        
         # Look for plugin.py files in plugin subfolders
         for plugin_dir in self.plugins_dir.iterdir():
             if plugin_dir.is_dir() and not plugin_dir.name.startswith('__'):
                 plugin_file = plugin_dir / "plugin.py"
                 if plugin_file.exists():
                     plugin_name = plugin_dir.name
+                    
+                    # Check if plugin is enabled in configuration
+                    if not self.is_plugin_enabled(plugin_name, plugin_config):
+                        self.logger.info(f"⏸️  Skipping disabled plugin: {plugin_name}")
+                        results[plugin_name] = False
+                        continue
+                    
                     success = await self.load_plugin_from_file(plugin_file, plugin_name)
                     results[plugin_name] = success
             
-        self.logger.info(f"✅ Plugin discovery complete: {len(self.plugins)} loaded, {len(self.failed_plugins)} failed")
+        enabled_count = len(self.plugins)
+        disabled_count = sum(1 for result in results.values() if not result and plugin_config.get(plugin_name, {}).get('enabled', True) == False)
+        failed_count = len(self.failed_plugins)
+        
+        self.logger.info(f"✅ Plugin discovery complete: {enabled_count} loaded, {disabled_count} disabled, {failed_count} failed")
         
         # Start hot reloading after initial load
         await self.start_hot_reloading()

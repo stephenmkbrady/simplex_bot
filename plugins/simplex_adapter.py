@@ -68,11 +68,13 @@ class SimplexBotAdapter(BotAdapter):
         contact_name = contact_info.get('localDisplayName', 'Unknown')
         
         # Determine chat_id based on chat type (group vs direct)
-        chat_type = chat_info.get("type", "direct")
-        if chat_type == "group":
+        # Use same logic as message handler for consistency
+        if "groupInfo" in chat_info:
+            # Group message - route to group
             group_info = chat_info.get("groupInfo", {})
             chat_id = group_info.get("localDisplayName", group_info.get("groupName", contact_name))
         else:
+            # Direct message - route to contact
             chat_id = contact_name
         
         # Get message content
