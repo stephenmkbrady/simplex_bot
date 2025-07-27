@@ -227,21 +227,29 @@ class WebSocketManager:
             self.logger.error(f"📤 SEND TRACEBACK: {traceback.format_exc()}")
             return None
     
-    async def send_message(self, contact_name: str, message: str) -> None:
+    async def send_message(self, contact_name: str, message: str, is_group: bool = None) -> None:
         """Send a message to a specific contact, splitting long messages"""
         websocket_id = id(self.websocket) if self.websocket else None
         self.logger.info(f"📤 SEND START: Sending to {contact_name} via WebSocket {websocket_id}")
         self.logger.info(f"📤 SEND MESSAGE CONTENT: {message[:100]}...")
         
-        # Determine if this is a group or direct message
-        # Groups typically have names like "botgroup_11", "test123", etc.
-        # Contacts are typically user names like "alice", etc.
-        is_group = (contact_name.startswith(('botgroup', 'group', 'test')) or 
-                   '_' in contact_name or 
-                   any(char.isdigit() for char in contact_name.split('_')[-1] if '_' in contact_name))
+        # Use explicit is_group parameter if provided, otherwise fall back to detection
+        if is_group is None:
+            # DEPRECATED: Fallback group detection - should not be used
+            self.logger.warning(f"📤 DEPRECATED: Using fallback group detection for {contact_name} - caller should specify is_group parameter")
+            is_group = (contact_name.startswith(('botgroup', 'group', 'test')) or 
+                       (contact_name.startswith('test') and any(char.isdigit() for char in contact_name)) or
+                       ('_' in contact_name and contact_name.split('_')[-1].isdigit()))
         
+        # Quote group names with spaces for SimpleX CLI compatibility
+        if is_group and ' ' in contact_name:
+            quoted_contact_name = f"'{contact_name}'"
+        else:
+            quoted_contact_name = contact_name
+            
         prefix = "#" if is_group else "@"
-        self.logger.info(f"📤 SEND DEBUG: Detected {'group' if is_group else 'contact'}, using prefix '{prefix}'")
+        self.logger.info(f"📤 SEND DEBUG: {'Group' if is_group else 'Contact'} message, using prefix '{prefix}'")
+        self.logger.info(f"📤 SEND DEBUG: contact_name='{contact_name}', quoted='{quoted_contact_name}'")
         
         # Security configuration - these could be passed in constructor
         MAX_MESSAGE_LENGTH = 4096
@@ -264,7 +272,7 @@ class WebSocketManager:
                 else:
                     chunk_message = chunk
                 
-                command = f"{prefix}{contact_name} {chunk_message}"
+                command = f"{prefix}{quoted_contact_name} {chunk_message}"
                 await self.send_command(command)
                 self.logger.info(f"Sent message part {i+1}/{len(chunks)} to {contact_name}: {chunk_message[:100]}...")
                 
@@ -272,7 +280,7 @@ class WebSocketManager:
                 if i < len(chunks) - 1:
                     await asyncio.sleep(0.5)
         else:
-            command = f"{prefix}{contact_name} {message}"
+            command = f"{prefix}{quoted_contact_name} {message}"
             await self.send_command(command)
             self.logger.info(f"Sent message to {contact_name}: {message[:100]}...")
     

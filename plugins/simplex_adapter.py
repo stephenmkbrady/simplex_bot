@@ -21,12 +21,40 @@ class SimplexBotAdapter(BotAdapter):
         # Store reference to bot instance for SimpleX-specific plugins
         self.bot_instance = simplex_bot
     
+    def _is_group_context(self, context: CommandContext) -> bool:
+        """Determine if the context represents a group message"""
+        try:
+            # Check if raw_message has group info (most reliable method)
+            if hasattr(context, 'raw_message') and context.raw_message:
+                raw_message = context.raw_message
+                chat_info = raw_message.get("chatInfo", {})
+                
+                # Check XFTP event structure
+                if not chat_info and "chatItem" in raw_message:
+                    chat_item = raw_message["chatItem"]
+                    chat_info = chat_item.get("chatInfo", {})
+                
+                # Check if this is a group message
+                return "groupInfo" in chat_info
+            
+            # Fallback: assume group if chat_id doesn't look like a direct contact name
+            # This is less reliable but better than hardcoded patterns
+            return False  # Default to direct message when uncertain
+            
+        except Exception as e:
+            self.logger.error(f"Error determining group context: {e}")
+            return False
+    
     async def send_message(self, message: str, context: CommandContext) -> bool:
         """Send a message back to the correct chat (group or direct)"""
         try:
             # Use chat_id for the destination - this will be the group name for group chats,
             # or the contact name for direct chats
-            await self.bot.websocket_manager.send_message(context.chat_id, message)
+            
+            # Determine if this is a group message based on the original context
+            is_group = self._is_group_context(context)
+            
+            await self.bot.websocket_manager.send_message(context.chat_id, message, is_group=is_group)
             self.logger.debug(f"Sent message to {context.chat_id}: {message[:100]}...")
             return True
         except Exception as e:

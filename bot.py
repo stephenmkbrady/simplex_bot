@@ -700,36 +700,50 @@ class SimplexChatBot:
             
             # Try different approaches to accept group invitation
             # Based on testing, use /join commands for group invitations
+            # Quote group name if it contains spaces to handle parsing correctly
+            # SimpleX CLI uses single quotes for names with spaces: @'John Doe' 
+            has_spaces = ' ' in group_name
+            quoted_group_name = f"'{group_name}'" if has_spaces else group_name
+            
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: group_name='{group_name}', has_spaces={has_spaces}")
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: quoted_group_name='{quoted_group_name}'")
+            
             commands_to_try = [
-                f"/join {group_name}",            # Join with group name (primary)
+                f"/join {quoted_group_name}",     # Join with group name (quoted if needed)
                 f"/join {group_id}",              # Join with group ID (fallback)
             ]
+            
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: commands_to_try={commands_to_try}")
             
             # Try each command until one works
             for i, command in enumerate(commands_to_try):
                 try:
-                    self.logger.info(f"Attempt {i+1}: Trying command: {command}")
+                    self.logger.info(f"🔧 GROUP JOIN DEBUG: Attempt {i+1}: Trying command: {command}")
                     
                     # Send the command through WebSocket
                     response = await self.websocket_manager.send_command(command, wait_for_response=True)
                     
-                    self.logger.info(f"Command response: {response}")
+                    self.logger.info(f"🔧 GROUP JOIN DEBUG: Command response: {response}")
+                    self.logger.info(f"🔧 GROUP JOIN DEBUG: Response type: {type(response)}")
                     
                     # If we get here without error, the command might have worked
                     if response and 'error' not in str(response).lower():
                         self.logger.info(f"✅ Successfully sent command: {command}")
                         break
                     else:
-                        self.logger.warning(f"Command {command} returned error or empty response")
+                        self.logger.warning(f"🔧 GROUP JOIN DEBUG: Command {command} returned error or empty response")
+                        self.logger.info(f"🔧 GROUP JOIN DEBUG: Will continue to next command (if available)")
                         
                 except Exception as e:
-                    self.logger.warning(f"Command '{command}' failed: {e}")
+                    self.logger.warning(f"🔧 GROUP JOIN DEBUG: Command '{command}' failed with exception: {e}")
                     if i == len(commands_to_try) - 1:  # Last attempt
-                        self.logger.error(f"All command attempts failed for group '{group_name}'")
+                        self.logger.error(f"🔧 GROUP JOIN DEBUG: All command attempts failed for group '{group_name}'")
                         raise e
                     # Continue to next command
             
-            self.logger.info(f"Group invitation acceptance process completed for '{group_name}'")
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: Group invitation acceptance process completed for '{group_name}'")
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: Commands sent, waiting for async responses...")
+            self.logger.info(f"🔧 GROUP JOIN DEBUG: Success will be indicated by 'memberJoinedGroup' event or group messages")
             
         except Exception as e:
             self.logger.error(f"Error accepting group invitation: {e}")
@@ -737,11 +751,15 @@ class SimplexChatBot:
     async def _handle_member_joined_group(self, response_data: Dict[str, Any]):
         """Handle when a member (including the bot) joins a group"""
         try:
+            self.logger.info(f"🔧 MEMBER JOIN DEBUG: Processing memberJoinedGroup event")
+            
             group_info = response_data.get('groupInfo', {})
             member_info = response_data.get('memberInfo', {})
             
             group_name = group_info.get('groupName', 'Unknown Group')
             member_name = member_info.get('localDisplayName', 'Unknown Member')
+            
+            self.logger.info(f"🔧 MEMBER JOIN DEBUG: group_name='{group_name}', member_name='{member_name}'")
             
             # Check if this is the bot joining
             # Assuming the bot's member info will have a specific identifier or we can detect it
@@ -751,9 +769,13 @@ class SimplexChatBot:
             # If this is the bot itself joining (you may need to adjust this logic based on actual response structure)
             if member_name == self.config.get('bot_name', 'SimpleX Bot') or 'bot' in member_name.lower():
                 self.logger.info(f"🎉 Bot successfully joined group '{group_name}'!")
+                self.logger.info(f"🔧 MEMBER JOIN DEBUG: Bot join confirmed for group '{group_name}'")
+            else:
+                self.logger.info(f"🔧 MEMBER JOIN DEBUG: Other member '{member_name}' joined, not the bot")
                 
         except Exception as e:
             self.logger.error(f"Error handling member joined group: {e}")
+            self.logger.error(f"🔧 MEMBER JOIN DEBUG: Full response_data: {response_data}")
 
     async def _handle_file_descriptor_ready(self, response_data: Dict[str, Any]):
         """Handle rcvFileDescrReady event - delegate to message handler"""

@@ -70,15 +70,32 @@ class MessageHandler:
             # Fallback to contact name
             return contact_name
     
+    def _is_group_message(self, message_data: Dict[str, Any]) -> bool:
+        """Determine if this is a group message based on message structure"""
+        try:
+            chat_info = message_data.get("chatInfo", {})
+            
+            # Check XFTP event structure
+            if not chat_info and "chatItem" in message_data:
+                chat_item = message_data["chatItem"]
+                chat_info = chat_item.get("chatInfo", {})
+            
+            # Check if this is a group message
+            return "groupInfo" in chat_info
+        except Exception as e:
+            self.logger.error(f"🔄 ROUTING: Error determining if group message: {e}")
+            return False
+    
     async def send_routed_message(self, message_data: Dict[str, Any], contact_name: str, message: str) -> None:
         """Send a message using proper routing logic (group vs direct chat)"""
         try:
             chat_id = self._determine_chat_routing(message_data, contact_name)
-            await self.send_message_callback(chat_id, message)
+            is_group = self._is_group_message(message_data)
+            await self.send_message_callback(chat_id, message, is_group=is_group)
         except Exception as e:
             self.logger.error(f"🔄 ROUTING: Error sending routed message: {e}")
             # Fallback to direct contact
-            await self.send_message_callback(contact_name, message)
+            await self.send_message_callback(contact_name, message, is_group=False)
     
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """Process an incoming message and handle commands"""
@@ -186,7 +203,8 @@ class MessageHandler:
             if result:
                 # Use common routing logic
                 chat_id = self._determine_chat_routing(message_data, contact_name)
-                await self.send_message_callback(chat_id, result)
+                is_group = self._is_group_message(message_data)
+                await self.send_message_callback(chat_id, result, is_group=is_group)
                 self.message_logger.info(f"TO {chat_id}: {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
         except Exception as e:
             self.logger.error(f"Error executing command: {e}")
@@ -720,15 +738,16 @@ class MessageHandler:
                     )
                     
                     # Process the downloaded audio file with STT plugin
-                    # The STT plugin expects: handle_downloaded_audio(filename, file_path, user_name, chat_id)
-                    result = await stt_plugin.handle_downloaded_audio(filename, file_path, contact_name, chat_id)
+                    # The STT plugin expects: handle_downloaded_audio(filename, file_path, user_name, chat_id, message_data)
+                    result = await stt_plugin.handle_downloaded_audio(filename, file_path, contact_name, chat_id, xftp_data)
                     
                     if result:
                         self.logger.info(f"🎤 STT: Transcription completed for {filename}")
                         
                         # Send the transcription result to the chat
                         try:
-                            await self.send_message_callback(chat_id, result)
+                            is_group = self._is_group_message(xftp_data)
+                            await self.send_message_callback(chat_id, result, is_group=is_group)
                             self.logger.info(f"🎤 STT: Transcription sent to chat: {chat_id}")
                         except Exception as e:
                             self.logger.error(f"🎤 STT: Failed to send transcription to chat: {e}")

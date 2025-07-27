@@ -2,12 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies including terminal support
+# Install system dependencies including terminal support and ffmpeg
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     net-tools \
     procps \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install SimpleX Chat CLI
