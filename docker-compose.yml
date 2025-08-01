@@ -14,7 +14,8 @@ services:
       - ./config_manager.py:/app/config_manager.py:ro
       - ./bot.py:/app/bot.py
       - ./file_download_manager.py:/app/file_download_manager.py:ro
-      - ./message_handler.py:/app/message_handler.py:ro
+      - ./message_handler.py:/app/message_handler.py
+      - ./message_context.py:/app/message_context.py:ro
       - ./websocket_manager.py:/app/websocket_manager.py:ro
       - ./xftp_client.py:/app/xftp_client.py:ro
       - ./admin_manager.py:/app/admin_manager.py:ro

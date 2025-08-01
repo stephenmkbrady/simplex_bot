@@ -197,10 +197,13 @@ class CommandRegistry:
             try:
                 # Use the adapter's normalize_context method to create proper context
                 if hasattr(plugin_manager, 'adapter') and plugin_manager.adapter:
-                    # Create a fake message structure that normalize_context expects
+                    # Create a complete message structure that includes the original chatItem data
+                    # This is crucial for group messages to preserve the groupMember information
                     fake_message_data = {
                         'chatInfo': message_data.get('chatInfo', {}),
                         'chatItem': {
+                            # Preserve the original chatDir (contains groupMember for groups)
+                            'chatDir': message_data.get('chatItem', {}).get('chatDir', {}),
                             'content': {
                                 'msgContent': {
                                     'text': f"!{command_name} {' '.join(args)}"
@@ -277,7 +280,9 @@ class CommandRegistry:
         # Check plugin system status
         plugin_status = '✅ Active' if hasattr(self.bot_instance, 'plugin_manager') else '❌ Not Available'
         plugin_count = 0
+        enabled_plugin_count = 0
         all_commands = {}
+        total_commands = 0
         
         if hasattr(self.bot_instance, 'plugin_manager'):
             plugin_manager = getattr(self.bot_instance, 'plugin_manager')
@@ -286,6 +291,7 @@ class CommandRegistry:
             # Get commands from all plugins
             for plugin_name, plugin in plugin_manager.plugins.items():
                 if plugin.enabled:
+                    enabled_plugin_count += 1
                     commands = plugin.get_commands()
                     if commands:
                         all_commands[plugin_name] = {
@@ -293,6 +299,12 @@ class CommandRegistry:
                             'description': plugin.description,
                             'version': plugin.version
                         }
+                        total_commands += len(commands)
+        
+        # Add legacy commands from command registry
+        legacy_commands = self.list_commands()
+        if legacy_commands:
+            total_commands += len(legacy_commands)
         
         # Start building help text with bot info
         help_text = f"""🤖 **{bot_name} Help & Information**
@@ -305,11 +317,24 @@ class CommandRegistry:
 
 **System Status:**
 • Plugin System: {plugin_status}
-• Loaded Plugins: {plugin_count}
-• Total Commands: {sum(len(info['commands']) for info in all_commands.values()) + 1}
+• Total Plugins: {plugin_count}
+• Enabled Plugins: {enabled_plugin_count}
+• Total Commands: {total_commands}"""
+        
+        # Add legacy commands if any exist
+        if legacy_commands:
+            help_text += f"""
 
-**Core Commands:**
-• `!help` - Show this help and bot information
+**Core Commands:**"""
+            for cmd in legacy_commands:
+                if cmd == 'help':
+                    help_text += f"\n• `!{cmd}` - Show this help and bot information"
+                else:
+                    help_text += f"\n• `!{cmd}` - {cmd.title()} command"
+        
+        # Add plugin commands
+        if all_commands:
+            help_text += f"""
 
 **Available Plugin Commands:**"""
         
@@ -320,13 +345,25 @@ class CommandRegistry:
             help_text += f"*{plugin_info['description']}*\n"
             help_text += f"Commands: {commands_str}"
         
+        # Add dynamic tips based on available commands
+        tips = [
+            "All commands start with `!`",
+            "Commands are case-sensitive"
+        ]
+        
+        # Add tips for available commands
+        if 'core' in all_commands and 'plugins' in all_commands['core']['commands']:
+            tips.append("Use `!plugins` for detailed plugin status")
+        if 'simplex' in all_commands and 'stats' in all_commands['simplex']['commands']:
+            tips.append("Use `!stats` for bot statistics (admin only)")
+        if 'simplex' in all_commands and 'admin' in all_commands['simplex']['commands']:
+            tips.append("Use `!admin` for admin management (admin only)")
+        
         help_text += f"""
 
-**Tips:**
-• All commands start with `!`
-• Commands are case-sensitive
-• Use `!plugins` for detailed plugin status
-• Use `!status` for comprehensive bot information"""
+**Tips:**"""
+        for tip in tips:
+            help_text += f"\n• {tip}"
         
         await send_message_callback(contact_name, help_text)
 

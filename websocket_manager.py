@@ -237,9 +237,8 @@ class WebSocketManager:
         if is_group is None:
             # DEPRECATED: Fallback group detection - should not be used
             self.logger.warning(f"📤 DEPRECATED: Using fallback group detection for {contact_name} - caller should specify is_group parameter")
-            is_group = (contact_name.startswith(('botgroup', 'group', 'test')) or 
-                       (contact_name.startswith('test') and any(char.isdigit() for char in contact_name)) or
-                       ('_' in contact_name and contact_name.split('_')[-1].isdigit()))
+            # Default to False for safety - callers should provide explicit is_group parameter
+            is_group = False
         
         # Quote group names with spaces for SimpleX CLI compatibility
         if is_group and ' ' in contact_name:

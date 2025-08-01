@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 
 from file_download_manager import FileDownloadManager
+from message_context import MessageContext
 
 
 class MessageHandler:
@@ -31,6 +32,10 @@ class MessageHandler:
         
         # Constants
         self.MESSAGE_PREVIEW_LENGTH = 100
+    
+    def _get_message_context(self, message_data: Dict[str, Any]) -> MessageContext:
+        """Get unified message context using MessageContext class"""
+        return MessageContext(message_data)
     
     def _determine_chat_routing(self, message_data: Dict[str, Any], contact_name: str) -> str:
         """Determine the correct chat ID for routing messages based on message context"""
@@ -100,75 +105,26 @@ class MessageHandler:
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """Process an incoming message and handle commands"""
         try:
-            # Extract message information
-            chat_item = message_data.get("chatItem", {})
-            chat_info = message_data.get("chatInfo", {})
+            # Use unified message context for all parsing
+            context = self._get_message_context(message_data)
             
-            # Debug: Log the message structure to understand the issue
-            self.logger.info(f"🔍 MESSAGE DEBUG: chat_info keys: {list(chat_info.keys())}")
-            self.logger.info(f"🔍 MESSAGE DEBUG: chat_item keys: {list(chat_item.keys())}")
+            self.logger.debug(f"Processing message in {context.get_chat_context_string()}")
             
-            # Determine chat type (direct contact or group)
-            # Check for groupInfo to determine if this is a group message
-            if "groupInfo" in chat_info:
-                chat_type = "group"
-            elif "contact" in chat_info:
-                chat_type = "direct"
-            else:
-                # Fallback - check the 'type' field
-                chat_type = chat_info.get("type", "direct")
-            
-            self.logger.info(f"🔍 MESSAGE DEBUG: detected chat_type: '{chat_type}'")
-            
-            if chat_type == "direct":
-                # Get contact name - it's nested in the contact object
-                contact_info = chat_info.get("contact", {})
-                contact_name = contact_info.get("localDisplayName", "Unknown")
-                chat_context = f"DM from {contact_name}"
-            elif chat_type == "group":
-                # Get group and member information
-                group_info = chat_info.get("groupInfo", {})
-                chat_dir = chat_item.get("chatDir", {})
-                group_member = chat_dir.get("groupMember", {})
-                
-                # Debug: Log group parsing details
-                self.logger.info(f"🔍 GROUP DEBUG: group_info keys: {list(group_info.keys())}")
-                self.logger.info(f"🔍 GROUP DEBUG: chatDir keys: {list(chat_dir.keys())}")
-                self.logger.info(f"🔍 GROUP DEBUG: groupMember keys: {list(group_member.keys()) if group_member else 'None'}")
-                
-                # Extract group name and contact name from correct locations
-                group_name = group_info.get("localDisplayName", group_info.get("groupName", "Unknown Group"))
-                contact_name = group_member.get("localDisplayName", "Unknown Member")
-                chat_context = f"Group '{group_name}' from {contact_name}"
-                
-                self.logger.info(f"🔍 GROUP DEBUG: parsed group_name='{group_name}', contact_name='{contact_name}'")
-            else:
-                self.logger.warning(f"Unknown chat type: {chat_type}")
-                return
-            
-            self.logger.debug(f"Processing message in {chat_context}")
-            
-            # Get message content
-            content = chat_item.get("content", {})
-            msg_content = content.get("msgContent", {})
-            
-            # Basic content logging for debugging
-            self.logger.debug(f"Message content type: {content.get('type', 'unknown')}")
-            self.logger.debug(f"Message content keys: {list(msg_content.keys()) if msg_content else 'None'}")
-            msg_type = msg_content.get("type", "unknown")
+            # Get message content using context
+            msg_type = context.message_content.get("type", "unknown")
             
             # Log message type for debugging
             self.logger.debug(f"Processing message type: {msg_type}")
             
             if msg_type == "text":
-                await self._handle_text_message(contact_name, content, chat_context, message_data)
+                await self._handle_text_message(context, message_data)
             elif msg_type == "link":
                 # Handle link messages (treat similar to text for commands)
-                await self._handle_text_message(contact_name, content, chat_context, message_data)
+                await self._handle_text_message(context, message_data)
             elif msg_type in ["file", "image", "video", "audio", "media", "attachment"]:
-                await self._handle_file_message(contact_name, content, msg_type, chat_context, message_data)
+                await self._handle_file_message(context, msg_type, message_data)
             elif msg_type == "voice":
-                await self._handle_voice_message(contact_name, content, chat_context, message_data)
+                await self._handle_voice_message(context, message_data)
             else:
                 # Log unhandled message types
                 if msg_type not in ["text", "link"]:
@@ -179,17 +135,17 @@ class MessageHandler:
             # Log the full message structure on error for debugging
             self.logger.debug(f"Message data structure: {message_data}")
     
-    async def _handle_text_message(self, contact_name: str, content: Dict[str, Any], chat_context: str, message_data: Dict[str, Any]) -> None:
+    async def _handle_text_message(self, context: MessageContext, message_data: Dict[str, Any]) -> None:
         """Handle text messages and command processing"""
-        text = content.get("msgContent", {}).get("text", "")
+        text = context.message_content.get("text", "")
         
         # Log the message with context
-        self.message_logger.info(f"{chat_context}: {text}")
-        self.logger.info(f"Received message in {chat_context}: {text[:self.MESSAGE_PREVIEW_LENGTH]}...")
+        self.message_logger.info(f"{context.get_chat_context_string()}: {text}")
+        self.logger.info(f"Received message in {context.get_chat_context_string()}: {text[:self.MESSAGE_PREVIEW_LENGTH]}...")
         
         # Check if it's a command
         if self.command_registry.is_command(text):
-            await self._process_command(contact_name, text, message_data)
+            await self._process_command(context.contact_name, text, message_data)
     
     async def _process_command(self, contact_name: str, text: str, message_data: Dict[str, Any]) -> None:
         """Process a command message"""
@@ -577,7 +533,7 @@ class MessageHandler:
             if download_result:
                 actual_filename, actual_path = download_result
                 self.logger.info(f"🎯 XFTP: File download successful: {actual_filename} at {actual_path}")
-                await self.send_routed_message(data, contact_name, f"✓ Downloaded via XFTP: {actual_filename}")
+                #await self.send_routed_message(data, contact_name, f"✓ Downloaded via XFTP: {actual_filename}")
                 
                 # Check if this is an audio file and trigger STT processing
                 await self._maybe_trigger_stt_processing(actual_filename, actual_path, contact_name, data)
@@ -714,8 +670,9 @@ class MessageHandler:
                     self.logger.debug(f"🎤 STT: Found STT plugin, processing downloaded audio file: {filename}")
                     
                     # Create context for the STT plugin based on XFTP event data
-                    # Use common routing logic to determine correct chat destination
-                    chat_id = self._determine_chat_routing(xftp_data, contact_name)
+                    # Use unified context for routing
+                    context = self._get_message_context(xftp_data)
+                    chat_id = context.chat_id
                     
                     # Create file info for STT plugin
                     audio_info = {

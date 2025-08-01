@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from .universal_plugin_base import BotAdapter, CommandContext, BotPlatform
+from message_context import MessageContext
 
 
 class SimplexBotAdapter(BotAdapter):
@@ -24,22 +25,13 @@ class SimplexBotAdapter(BotAdapter):
     def _is_group_context(self, context: CommandContext) -> bool:
         """Determine if the context represents a group message"""
         try:
-            # Check if raw_message has group info (most reliable method)
+            # Use MessageContext for consistent group detection
             if hasattr(context, 'raw_message') and context.raw_message:
-                raw_message = context.raw_message
-                chat_info = raw_message.get("chatInfo", {})
-                
-                # Check XFTP event structure
-                if not chat_info and "chatItem" in raw_message:
-                    chat_item = raw_message["chatItem"]
-                    chat_info = chat_item.get("chatInfo", {})
-                
-                # Check if this is a group message
-                return "groupInfo" in chat_info
+                message_context = MessageContext(context.raw_message)
+                return message_context.is_group
             
-            # Fallback: assume group if chat_id doesn't look like a direct contact name
-            # This is less reliable but better than hardcoded patterns
-            return False  # Default to direct message when uncertain
+            # Fallback: default to direct message when uncertain
+            return False
             
         except Exception as e:
             self.logger.error(f"Error determining group context: {e}")
@@ -87,27 +79,51 @@ class SimplexBotAdapter(BotAdapter):
     
     def normalize_context(self, platform_data: Dict[str, Any]) -> CommandContext:
         """Convert SimpleX message data to universal CommandContext"""
-        # Extract SimpleX-specific message data
-        chat_item = platform_data.get('chatItem', {})
-        chat_info = platform_data.get('chatInfo', {})
+        # Debug logging to see what data we're getting
+        self.logger.info(f"🔍 ADAPTER NORMALIZE: Processing message data")
+        self.logger.info(f"🔍 ADAPTER NORMALIZE: chatInfo keys: {list(platform_data.get('chatInfo', {}).keys())}")
+        self.logger.info(f"🔍 ADAPTER NORMALIZE: chatItem keys: {list(platform_data.get('chatItem', {}).keys())}")
         
-        # Get contact information
-        contact_info = chat_info.get('contact', {})
-        contact_name = contact_info.get('localDisplayName', 'Unknown')
-        
-        # Determine chat_id based on chat type (group vs direct)
-        # Use same logic as message handler for consistency
-        if "groupInfo" in chat_info:
-            # Group message - route to group
-            group_info = chat_info.get("groupInfo", {})
-            chat_id = group_info.get("localDisplayName", group_info.get("groupName", contact_name))
-        else:
-            # Direct message - route to contact
-            chat_id = contact_name
-        
-        # Get message content
-        content = chat_item.get('content', {})
-        msg_content = content.get('msgContent', {})
+        # Use unified message context for consistent parsing
+        try:
+            message_context = MessageContext(platform_data)
+            contact_name = message_context.contact_name
+            chat_id = message_context.chat_id
+            msg_content = message_context.message_content.get("msg_content", {})
+            self.logger.info(f"🔍 ADAPTER NORMALIZE: MessageContext SUCCESS - contact_name='{contact_name}', chat_id='{chat_id}'")
+        except Exception as e:
+            self.logger.error(f"🔍 ADAPTER NORMALIZE: Failed to create MessageContext, using fallback: {e}")
+            # Fallback to original parsing
+            chat_item = platform_data.get('chatItem', {})
+            chat_info = platform_data.get('chatInfo', {})
+            
+            # Get contact information
+            contact_info = chat_info.get('contact', {})
+            contact_name = contact_info.get('localDisplayName', 'Unknown')
+            self.logger.info(f"🔍 ADAPTER NORMALIZE: FALLBACK - extracted contact_name='{contact_name}' from contact info")
+            
+            # For group messages, try to get the actual sender from groupMember
+            if "groupInfo" in chat_info:
+                # This is the bug! The fallback doesn't extract from groupMember
+                chat_dir = chat_item.get("chatDir", {})
+                group_member = chat_dir.get("groupMember", {})
+                if group_member:
+                    actual_contact_name = group_member.get("localDisplayName", contact_name)
+                    self.logger.info(f"🔍 ADAPTER NORMALIZE: FALLBACK - found groupMember contact_name='{actual_contact_name}'")
+                    contact_name = actual_contact_name
+                
+                # Group message - route to group
+                group_info = chat_info.get("groupInfo", {})
+                chat_id = group_info.get("localDisplayName", group_info.get("groupName", contact_name))
+            else:
+                # Direct message - route to contact
+                chat_id = contact_name
+            
+            self.logger.info(f"🔍 ADAPTER NORMALIZE: FALLBACK - final contact_name='{contact_name}', chat_id='{chat_id}'")
+            
+            # Get message content
+            content = chat_item.get('content', {})
+            msg_content = content.get('msgContent', {})
         
         # Parse command from text
         text = msg_content.get('text', '').strip()
