@@ -321,25 +321,59 @@ class CommandRegistry:
 • Enabled Plugins: {enabled_plugin_count}
 • Total Commands: {total_commands}"""
         
-        # Add legacy commands if any exist
-        if legacy_commands:
+        # Add core commands (both legacy and core plugin commands)
+        core_commands = set(legacy_commands) if legacy_commands else set()
+        
+        # Add core plugin commands if available
+        if 'core' in all_commands:
+            core_commands.update(all_commands['core']['commands'])
+        
+        if core_commands:
             help_text += f"""
 
 **Core Commands:**"""
-            for cmd in legacy_commands:
+            # Sort commands for consistent display
+            for cmd in sorted(core_commands):
                 if cmd == 'help':
                     help_text += f"\n• `!{cmd}` - Show this help and bot information"
+                elif cmd == 'plugins':
+                    help_text += f"\n• `!{cmd}` - List all plugins and their status"
+                elif cmd == 'commands':
+                    help_text += f"\n• `!{cmd}` - List all available commands"
+                elif cmd == 'ping':
+                    help_text += f"\n• `!{cmd}` - Test bot responsiveness"
+                elif cmd == 'uptime':
+                    help_text += f"\n• `!{cmd}` - Show bot uptime"
+                elif cmd == 'enable':
+                    help_text += f"\n• `!{cmd} <plugin>` - Enable a plugin"
+                elif cmd == 'disable':
+                    help_text += f"\n• `!{cmd} <plugin>` - Disable a plugin"
+                elif cmd == 'start':
+                    help_text += f"\n• `!{cmd} <plugin>` - Start a plugin"
+                elif cmd == 'stop':
+                    help_text += f"\n• `!{cmd} <plugin>` - Stop a plugin"
+                elif cmd == 'reload':
+                    help_text += f"\n• `!{cmd} <plugin>` - Reload a plugin"
+                elif cmd == 'status':
+                    help_text += f"\n• `!{cmd} <plugin>` - Show plugin status"
+                elif cmd == 'platform':
+                    help_text += f"\n• `!{cmd}` - Show platform information"
+                elif cmd == 'container':
+                    help_text += f"\n• `!{cmd} <action> <plugin>` - Manage plugin containers"
+                elif cmd == 'containers':
+                    help_text += f"\n• `!{cmd}` - List all containerized plugins"
                 else:
                     help_text += f"\n• `!{cmd}` - {cmd.title()} command"
         
-        # Add plugin commands
-        if all_commands:
+        # Add plugin commands (excluding core plugin which is shown separately)
+        plugin_commands = {k: v for k, v in all_commands.items() if k != 'core'}
+        if plugin_commands:
             help_text += f"""
 
 **Available Plugin Commands:**"""
         
         # Add plugin commands
-        for plugin_name, plugin_info in all_commands.items():
+        for plugin_name, plugin_info in plugin_commands.items():
             commands_str = ', '.join([f"`!{cmd}`" for cmd in plugin_info['commands']])
             help_text += f"\n\n**{plugin_name.title()} Plugin** (v{plugin_info['version']}):\n"
             help_text += f"*{plugin_info['description']}*\n"
@@ -351,13 +385,21 @@ class CommandRegistry:
             "Commands are case-sensitive"
         ]
         
-        # Add tips for available commands
-        if 'core' in all_commands and 'plugins' in all_commands['core']['commands']:
+        # Add tips for available commands dynamically
+        if 'plugins' in core_commands:
             tips.append("Use `!plugins` for detailed plugin status")
-        if 'simplex' in all_commands and 'stats' in all_commands['simplex']['commands']:
-            tips.append("Use `!stats` for bot statistics (admin only)")
-        if 'simplex' in all_commands and 'admin' in all_commands['simplex']['commands']:
-            tips.append("Use `!admin` for admin management (admin only)")
+        if 'commands' in core_commands:
+            tips.append("Use `!commands` for complete command list with examples")
+        if plugin_commands:
+            tips.append("Plugin commands are automatically discovered and loaded")
+        
+        # Check for specific plugin features
+        if 'simplex' in all_commands:
+            simplex_commands = all_commands['simplex']['commands']
+            if 'stats' in simplex_commands:
+                tips.append("Use `!stats` for bot statistics (admin only)")
+            if 'admin' in simplex_commands:
+                tips.append("Use `!admin` for admin management (admin only)")
         
         help_text += f"""
 
