@@ -19,9 +19,15 @@ plugins:
   
   homeassistant:
     enabled: true
+
+  krumble:
+    enabled: true
   
   stt_openai:
     enabled: true  # STT plugin using OpenAI Whisper
   
   youtube:
+    enabled: true
+  
+  loupe:
     enabled: true

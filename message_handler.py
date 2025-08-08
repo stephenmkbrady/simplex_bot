@@ -539,7 +539,6 @@ class MessageHandler:
                 await self._maybe_trigger_stt_processing(actual_filename, actual_path, contact_name, data)
             else:
                 self.logger.error(f"🎯 XFTP: File download failed: {temp_file_name}")
-                await self.send_routed_message(data, contact_name, f"✗ XFTP download failed")
                 
         except Exception as e:
             self.logger.error(f"🎯 XFTP: Error handling file descriptor ready: {e}")

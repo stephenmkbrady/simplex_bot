@@ -9,3 +9,5 @@ aiohttp>=3.8.0
 yt-dlp
 aiofiles>=23.1.0
 homeassistant-api
+beautifulsoup4>=4.11.0
+html2text>=2020.1.16

@@ -18,7 +18,7 @@ import threading
 import time
 import logging
 
-from .universal_plugin_base import UniversalBotPlugin, BotAdapter, CommandContext
+from .universal_plugin_base import UniversalBotPlugin, ContainerizedBotPlugin, BotAdapter, CommandContext
 
 
 class UniversalPluginFileHandler(FileSystemEventHandler):
@@ -343,11 +343,26 @@ class UniversalPluginManager:
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if (isinstance(attr, type) and 
-                    issubclass(attr, UniversalBotPlugin) and 
-                    attr != UniversalBotPlugin):
-                    plugin_class = attr
-                    break
+                self.logger.debug(f"🔍 Checking class {attr_name}: {attr}")
+                if isinstance(attr, type):
+                    is_subclass = issubclass(attr, UniversalBotPlugin)
+                    not_universal = (attr != UniversalBotPlugin)
+                    not_containerized = (attr != ContainerizedBotPlugin)
+                    self.logger.debug(f"  issubclass(UniversalBotPlugin): {is_subclass}")
+                    self.logger.debug(f"  not UniversalBotPlugin: {not_universal}")
+                    self.logger.debug(f"  not ContainerizedBotPlugin: {not_containerized}")
+                    
+                    if (isinstance(attr, type) and 
+                        issubclass(attr, UniversalBotPlugin) and 
+                        attr != UniversalBotPlugin and 
+                        attr != ContainerizedBotPlugin):
+                        self.logger.debug(f"  *** SELECTED: {attr} ***")
+                        plugin_class = attr
+                        break
+                    else:
+                        self.logger.debug(f"  SKIPPED")
+            
+            self.logger.debug(f"🔍 Final plugin_class: {plugin_class}")
             
             if not plugin_class:
                 raise ImportError(f"No UniversalBotPlugin subclass found in {plugin_file}")
@@ -360,7 +375,7 @@ class UniversalPluginManager:
                 self.logger.warning(f"Plugin {plugin.name} does not support platform {self.adapter.platform.value}")
                 return False
             
-            # Initialize plugin with adapter
+            # Initialize plugin with adapter (containers are auto-started in ContainerizedBotPlugin)
             if await plugin.initialize(self.adapter):
                 # Cleanup old plugin if reloading
                 if plugin.name in self.plugins:
@@ -464,10 +479,24 @@ class UniversalPluginManager:
                     commands[cmd] = plugin.name
         return commands
     
-    def get_plugin_status(self) -> Dict[str, any]:
-        """Get status of all plugins"""
+    async def get_plugin_status(self) -> Dict[str, any]:
+        """Get status of all plugins including container status"""
+        loaded_plugins = {}
+        for name, plugin in self.plugins.items():
+            plugin_info = plugin.get_info()
+            
+            # Add container status for containerized plugins
+            if hasattr(plugin, 'requires_container') and plugin.requires_container():
+                try:
+                    container_status = await plugin.get_container_status()
+                    plugin_info['container_status'] = container_status
+                except Exception as e:
+                    plugin_info['container_status'] = {"error": str(e)}
+            
+            loaded_plugins[name] = plugin_info
+        
         return {
-            "loaded": {name: plugin.get_info() for name, plugin in self.plugins.items()},
+            "loaded": loaded_plugins,
             "failed": self.failed_plugins,
             "total_loaded": len(self.plugins),
             "total_failed": len(self.failed_plugins),
@@ -475,13 +504,102 @@ class UniversalPluginManager:
             "platform": self.adapter.platform.value if self.adapter else None
         }
     
+    async def start_plugin_containers(self, plugin_name: str) -> bool:
+        """Start containers for a specific plugin"""
+        if plugin_name not in self.plugins:
+            self.logger.error(f"Plugin {plugin_name} not found")
+            return False
+        
+        plugin = self.plugins[plugin_name]
+        if hasattr(plugin, 'requires_container') and plugin.requires_container():
+            return await plugin.start_services()
+        else:
+            self.logger.warning(f"Plugin {plugin_name} does not require containers")
+            return False
+    
+    async def stop_plugin_containers(self, plugin_name: str) -> bool:
+        """Stop containers for a specific plugin"""
+        if plugin_name not in self.plugins:
+            self.logger.error(f"Plugin {plugin_name} not found")
+            return False
+        
+        plugin = self.plugins[plugin_name]
+        if hasattr(plugin, 'requires_container') and plugin.requires_container():
+            return await plugin.stop_services()
+        else:
+            self.logger.warning(f"Plugin {plugin_name} does not require containers")
+            return False
+    
+    async def restart_plugin_containers(self, plugin_name: str) -> bool:
+        """Restart containers for a specific plugin"""
+        if plugin_name not in self.plugins:
+            self.logger.error(f"Plugin {plugin_name} not found")
+            return False
+        
+        plugin = self.plugins[plugin_name]
+        if hasattr(plugin, 'requires_container') and plugin.requires_container():
+            return await plugin.restart_services()
+        else:
+            self.logger.warning(f"Plugin {plugin_name} does not require containers")
+            return False
+    
+    async def cleanup_plugin_containers(self, plugin_name: str) -> bool:
+        """Cleanup containers for a specific plugin"""
+        if plugin_name not in self.plugins:
+            self.logger.error(f"Plugin {plugin_name} not found")
+            return False
+        
+        plugin = self.plugins[plugin_name]
+        if hasattr(plugin, 'requires_container') and plugin.requires_container():
+            return await plugin.cleanup_services()
+        else:
+            self.logger.warning(f"Plugin {plugin_name} does not require containers")
+            return False
+    
+    async def get_container_status(self, plugin_name: str) -> Dict[str, any]:
+        """Get container status for a specific plugin"""
+        if plugin_name not in self.plugins:
+            return {"error": f"Plugin {plugin_name} not found"}
+        
+        plugin = self.plugins[plugin_name]
+        if hasattr(plugin, 'requires_container') and plugin.requires_container():
+            return await plugin.get_container_status()
+        else:
+            return {"message": f"Plugin {plugin_name} does not require containers"}
+    
     async def cleanup(self):
         """Cleanup plugin manager"""
         await self.stop_hot_reloading()
         
-        # Cleanup all plugins
+        # Stop all containerized plugins first
+        containerized_plugins = []
+        regular_plugins = []
+        
         for plugin in list(self.plugins.values()):
-            await plugin.cleanup()
+            if hasattr(plugin, 'requires_container') and plugin.requires_container():
+                containerized_plugins.append(plugin)
+            else:
+                regular_plugins.append(plugin)
+        
+        # Stop containerized plugins first (they might take longer)
+        if containerized_plugins:
+            self.logger.info(f"🐳 Stopping {len(containerized_plugins)} containerized plugins...")
+            for plugin in containerized_plugins:
+                try:
+                    self.logger.info(f"🐳 Stopping containers for {plugin.name}...")
+                    await plugin.cleanup()
+                    self.logger.info(f"✅ Stopped containers for {plugin.name}")
+                except Exception as e:
+                    self.logger.error(f"❌ Error stopping containers for {plugin.name}: {e}")
+        
+        # Cleanup regular plugins
+        if regular_plugins:
+            self.logger.info(f"🔌 Cleaning up {len(regular_plugins)} regular plugins...")
+            for plugin in regular_plugins:
+                try:
+                    await plugin.cleanup()
+                except Exception as e:
+                    self.logger.error(f"❌ Error cleaning up {plugin.name}: {e}")
         
         self.plugins.clear()
         self.logger.info("🔌 Universal plugin manager cleanup complete")

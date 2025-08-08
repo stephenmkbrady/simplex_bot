@@ -1,27 +1,36 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Install system dependencies including terminal support and ffmpeg
+# Install system dependencies including Python, ffmpeg, and Docker CLI
 RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
     curl \
     ca-certificates \
     net-tools \
     procps \
     ffmpeg \
+    apt-transport-https \
+    gnupg \
+    lsb-release \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install SimpleX Chat CLI
-RUN curl -L https://github.com/simplex-chat/simplex-chat/releases/latest/download/simplex-chat-ubuntu-22_04-x86-64 -o /usr/local/bin/simplex-chat \
+RUN curl -L https://github.com/simplex-chat/simplex-chat/releases/download/v6.4.2/simplex-chat-ubuntu-22_04-x86_64 -o /usr/local/bin/simplex-chat \
     && chmod +x /usr/local/bin/simplex-chat
 
 # Download and install XFTP CLI
-RUN curl -L https://github.com/simplex-chat/simplexmq/releases/latest/download/xftp-ubuntu-22_04-x86-64 -o /usr/local/bin/xftp \
+RUN curl -L https://github.com/simplex-chat/simplexmq/releases/latest/download/xftp-ubuntu-22_04-x86_64 -o /usr/local/bin/xftp \
     && chmod +x /usr/local/bin/xftp
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy bot code and scripts
 COPY bot.py .
@@ -36,8 +45,10 @@ COPY check_connection.sh .
 COPY websocket_connect.py .
 COPY connect.sh .
 
-# Create a non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Create a non-root user and add to docker group
+RUN groupadd -r appuser && useradd -r -g appuser appuser \
+    && groupadd -f -g 959 docker \
+    && usermod -aG docker appuser
 
 # Create logs directory and set permissions
 RUN mkdir -p /app/logs /app/media /app/temp /app/temp/xftp && \

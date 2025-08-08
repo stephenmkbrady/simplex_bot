@@ -44,7 +44,7 @@ if [ -n "$XFTP_SERVER_1" ]; then
 fi
 
 echo "Initializing SimpleX Chat profile..."
-echo 'Bot' | simplex-chat -d /app/profile/simplex --device-name Bot $SMP_ARGS $XFTP_ARGS -e '/q' -t 1 2>/dev/null || true
+(printf 'y\ny\ny\nBot\n'; yes) | simplex-chat -d /app/profile/simplex --device-name Bot $SMP_ARGS $XFTP_ARGS -e '/q' -t 1 2>/dev/null || true
 
 # Function to start and monitor SimpleX Chat CLI
 start_simplex_cli() {
@@ -73,7 +73,7 @@ check_simplex_health() {
 # Function to start bot
 start_bot() {
     echo "Starting bot..."
-    python bot.py --config /app/config.yml &
+    python3 bot.py --config /app/config.yml &
     BOT_PID=$!
     echo "Bot started with PID: $BOT_PID"
 }

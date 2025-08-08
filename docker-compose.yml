@@ -2,7 +2,7 @@ services:
   simplex-bot:
     build: .
     container_name: simplex-bot
-    user: "1000:1001"
+    user: "1000:959"
     volumes:
       - ./bot_profile:/app/profile
       - ./logs:/app/logs
@@ -10,6 +10,8 @@ services:
       - ./plugins:/app/plugins
       - ./config.yml:/app/config.yml:ro
       - ./.env:/app/.env:ro
+      # Docker socket for containerized plugins
+      - /var/run/docker.sock:/var/run/docker.sock
       # Core bot files
       - ./config_manager.py:/app/config_manager.py:ro
       - ./bot.py:/app/bot.py
@@ -37,6 +39,8 @@ services:
     env_file:
       - .env
     environment:
+      # Set proper HOME directory for Docker client
+      - HOME=/app
       # All bot configuration environment variables
       - SMP_SERVER_1=${SMP_SERVER_1}
       - SMP_SERVER_2=${SMP_SERVER_2:-}
@@ -82,4 +86,4 @@ services:
 
 networks:
   simplex-net:
-    driver: bridge
+    external: true
