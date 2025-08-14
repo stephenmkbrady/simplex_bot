@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Install system dependencies including Python, ffmpeg, and Docker CLI
+# Install system dependencies including Python, ffmpeg, Docker CLI, and Playwright dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
     python3-pip \
@@ -14,6 +14,21 @@ RUN apt-get update && apt-get install -y \
     apt-transport-https \
     gnupg \
     lsb-release \
+    # Playwright system dependencies for browser automation
+    libnspr4 \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgtk-3-0 \
+    libxss1 \
+    libasound2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libgbm1 \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
     && apt-get update \
@@ -53,6 +68,13 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser \
 # Create logs directory and set permissions
 RUN mkdir -p /app/logs /app/media /app/temp /app/temp/xftp && \
     chown -R 1000:1001 /app
+
+# Install Playwright browser binaries to accessible location
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
+RUN mkdir -p /app/.cache/ms-playwright && \
+    chown -R 1000:1001 /app/.cache && \
+    python3 -m playwright install chromium && \
+    chown -R 1000:1001 /app/.cache
 
 # Make scripts executable
 RUN chmod +x connect_invitation.sh check_connection.sh connect.sh
