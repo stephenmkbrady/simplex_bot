@@ -1,8 +1,8 @@
 services:
-  simplex-bot:
+  simplex-bot-v2:
     build: .
-    container_name: simplex-bot
-    user: "1000:959"
+    container_name: simplex-bot-v2
+    user: "1000:1001"
     volumes:
       - ./bot_profile:/app/profile
       - ./logs:/app/logs
@@ -34,8 +34,6 @@ services:
       # - connect_invitation.sh, connect.sh, check_connection.sh (standalone scripts not used by bot)
       # - websocket_connect.py, simplex_utils.py (utility scripts not imported by main bot)
       # - contact_id_resolver.py (not used by current bot implementation)
-    ports:
-      - "3030:3030"
     env_file:
       - .env
     environment:
@@ -49,6 +47,7 @@ services:
       - XFTP_SERVER_1=${XFTP_SERVER_1}
       - XFTP_SERVER_2=${XFTP_SERVER_2:-}
       - BOT_NAME=${BOT_NAME:-SimpleX Bot}
+      - DEVICE_NAME=${DEVICE_NAME:-rename_bot}
       - WEBSOCKET_URL=${WEBSOCKET_URL:-ws://localhost:3030}
       - AUTO_ACCEPT_CONTACTS=${AUTO_ACCEPT_CONTACTS:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -71,9 +70,9 @@ services:
       - simplex-net
     command: ["bash", "/app/start-services.sh"]
 
-  simplex-bot-test:
+  simplex-bot-test-v2:
     build: .
-    container_name: simplex-bot-test
+    container_name: simplex-bot-test-v2
     volumes:
       - ./:/app
       - ./tests:/app/tests

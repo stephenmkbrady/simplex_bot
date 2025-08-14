@@ -44,7 +44,14 @@ if [ -n "$XFTP_SERVER_1" ]; then
 fi
 
 echo "Initializing SimpleX Chat profile..."
-(printf 'y\ny\ny\nBot\n'; yes) | simplex-chat -d /app/profile/simplex --device-name Bot $SMP_ARGS $XFTP_ARGS -e '/q' -t 1 2>/dev/null || true
+DEVICE_NAME=${DEVICE_NAME:-"rename_bot"}
+cat << EOF | simplex-chat -d /app/profile/simplex --device-name "$DEVICE_NAME" $SMP_ARGS $XFTP_ARGS -e '/q' -t 1 2>/dev/null || true
+y
+y
+y
+$DEVICE_NAME
+
+EOF
 
 # Function to start and monitor SimpleX Chat CLI
 start_simplex_cli() {
@@ -57,7 +64,7 @@ start_simplex_cli() {
     ps aux | grep '[s]implex-chat' | awk '{print $2}' | xargs kill -TERM 2>/dev/null || true
     sleep 2
     
-    simplex-chat -d /app/profile/simplex --device-name Bot -p 3030 $SMP_ARGS $XFTP_ARGS > /app/logs/simplex-chat.log 2>&1 &
+    simplex-chat -d /app/profile/simplex --device-name "$DEVICE_NAME" -p 3030 $SMP_ARGS $XFTP_ARGS > /app/logs/simplex-chat.log 2>&1 &
     SIMPLEX_PID=$!
     echo "SimpleX Chat CLI started with PID: $SIMPLEX_PID"
     return $SIMPLEX_PID

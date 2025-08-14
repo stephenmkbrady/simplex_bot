@@ -17,16 +17,17 @@ echo ""
 
 # Try the Python WebSocket approach first (most reliable)
 echo "Attempting connection via WebSocket API..."
-python3 /app/simplex_utils.py "$INVITATION_URL"
+./compose.sh exec simplex-bot-v2 python3 /app/simplex_utils.py "$INVITATION_URL"
 
 if [ $? -eq 0 ]; then
     echo "✓ Connection successful!"
 else
-    echo "✗ WebSocket connection failed, trying alternative method..."
+    echo "✗ WebSocket connection failed, trying CLI method..."
     
-    # Fallback to the bash script method
+    # Fallback to CLI method
     echo "Attempting connection via CLI method..."
-    /app/connect_invitation.sh "$INVITATION_URL"
+    DEVICE_NAME=${DEVICE_NAME:-"rename_bot"}
+    echo "/connect $INVITATION_URL" | ./compose.sh exec simplex-bot-v2 timeout 30 simplex-chat -d /app/profile/simplex --device-name "$DEVICE_NAME" -e '/q' -t 1
 fi
 
 echo ""

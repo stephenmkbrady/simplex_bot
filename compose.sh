@@ -40,7 +40,7 @@ show_status() {
     echo "📊 Container Status:"
     echo ""
     echo "🤖 Main Bot:"
-    docker ps --filter "name=simplex-bot" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   No bot containers running"
+    docker ps --filter "name=simplex-bot-v2" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   No bot containers running"
     echo ""
     echo "🔌 Plugin Containers:"
     docker ps --filter "label=simplex.plugin" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   No plugin containers running"

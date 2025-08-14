@@ -45,7 +45,8 @@ test_simplex_cli() {
     
     # Test profile initialization
     echo "Testing profile initialization..."
-    echo "Command: simplex-chat -d /app/profile --device-name Bot -e '/q' -t 1"
+    DEVICE_NAME=${DEVICE_NAME:-"rename_bot"}
+    echo "Command: simplex-chat -d /app/profile --device-name $DEVICE_NAME -e '/q' -t 1"
     
     # Create a test to see what happens
     mkdir -p /tmp/test_profile

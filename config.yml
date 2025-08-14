@@ -13,6 +13,7 @@ servers:
 # Bot Settings
 bot:
   name: "${BOT_NAME:-SimpleX Bot}"
+  device_name: "${DEVICE_NAME:-rename_bot}"
   websocket_url: "${WEBSOCKET_URL:-ws://localhost:3030}"
   auto_accept_contacts: ${AUTO_ACCEPT_CONTACTS:-true}
   

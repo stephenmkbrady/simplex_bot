@@ -20,7 +20,7 @@ run_tests() {
     local extra_args="$2"
     
     echo "📋 Running $test_type tests..."
-    docker-compose --profile testing run --rm simplex-bot-test python -m pytest $extra_args
+    docker-compose --profile testing run --rm simplex-bot-test-v2 python -m pytest $extra_args
 }
 
 # Parse command line arguments
