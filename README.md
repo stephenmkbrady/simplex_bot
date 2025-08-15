@@ -66,13 +66,16 @@ The bot currently implements SimpleX Chat through:
 ## Prerequisites
 
 1. **Docker & Docker Compose**: For containerized deployment
-2. **Universal Plugin Base**: Required dependency for all plugins  
-3. **Platform-Specific Requirements**:
+2. **Universal Plugin Base**: Required dependency for all plugins
+3. **Platform Plugin**: **REQUIRED** - Platform-specific plugin for your chat platform
+   - 📦 **Available at**: https://github.com/stephenmkbrady/universal-bot-plugins
+   - ⚠️ **The bot will not function without a platform plugin** (e.g., SimpleX, Discord, Telegram)
+4. **Platform-Specific Requirements**:
    - **SimpleX**: Custom SMP and XFTP server addresses
-   - **Discord**: Bot token and guild permissions
+   - **Discord**: Bot token and guild permissions  
    - **Telegram**: Bot API token from @BotFather
    - **Matrix**: Homeserver URL and access token
-4. **Configuration Files**: config.yml and .env files (templates provided)
+5. **Configuration Files**: config.yml and .env files (templates provided)
 
 ## Implementation Guide
 
@@ -121,12 +124,23 @@ service_registry.register_service('user_management', discord_user_service)
 git clone <repository-url>
 cd SIMPLEX_BOT
 
-# Create required directories
-mkdir -p bot_profile logs media
+# Creates necessary folders, permissions, etc.
+./setup.sh
 
-# Copy configuration templates  
-cp config.yml.example config.yml
-cp .env.example .env
+# Configure your settings
+vim config.yml
+vim .env
+
+# Start the bot
+./compose.sh up -d
+# Monitor the logs, first start takes a little longer
+./compose.sh logs
+
+# Simplex specific steps
+# Create an invitation link for Simplex
+./generate_invite.sh
+#Paste your invite link into your client
+
 ```
 
 ### 2. Configure Your Setup
@@ -354,9 +368,12 @@ class MyUniversalPlugin(UniversalBotPlugin):
 ### Installation Requirements
 
 1. **Universal Plugin Base**: All plugins must inherit from `UniversalBotPlugin`
-2. **Platform Services**: Optional - use `self.require_service()` for advanced features
-3. **Docker Environment**: Recommended for consistent plugin execution
-4. **Hot Reload Support**: Automatic plugin updates during development
+2. **Platform Plugin**: **REQUIRED** - Install from https://github.com/stephenmkbrady/universal-bot-plugins
+   - Copy the appropriate platform plugin (e.g., `simplex/`, `discord/`, `telegram/`) to `plugins/external/`
+   - The bot framework requires at least one platform plugin to function
+3. **Platform Services**: Optional - use `self.require_service()` for advanced features
+4. **Docker Environment**: Recommended for consistent plugin execution
+5. **Hot Reload Support**: Automatic plugin updates during development
 
 ## Testing
 
@@ -480,14 +497,6 @@ config = ConfigManager('config.yml')
 print('Config valid:', config.get_bot_config() is not None)
 "
 ```
-
-## Security Considerations
-
-1. **Custom Servers Only**: Never use official SimpleX servers to maintain privacy
-2. **Environment Variables**: Keep sensitive configuration in `.env` files (not committed to git)
-3. **File Validation**: Validate downloaded media files for safety
-4. **Access Control**: Implement contact filtering and command permissions
-5. **Log Security**: Ensure logs don't contain sensitive data
 
 ## Important Links
 
