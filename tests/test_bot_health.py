@@ -107,7 +107,7 @@ class TestBotHealth:
         bot = SimplexChatBot(config_path=str(config_path))
         
         # Verify core command is registered (others moved to plugins)
-        core_commands = ['info']
+        core_commands = ['help']
         available_commands = bot.command_registry.list_commands()
         
         for cmd in core_commands:
@@ -306,7 +306,7 @@ class TestDockerHealthIntegration:
         # Verify network configuration
         assert "networks:" in compose_content
         assert "simplex-net:" in compose_content
-        assert "driver: bridge" in compose_content
+        assert "external: true" in compose_content
 
 
 class TestBotStabilityAndResilience:

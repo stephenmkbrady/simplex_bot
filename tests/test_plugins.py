@@ -4,8 +4,10 @@ Test script for the universal plugin system
 """
 import asyncio
 import sys
+import pytest
 from bot import SimplexChatBot
 
+@pytest.mark.asyncio
 async def test_plugin_integration():
     print("🚀 Testing Universal Plugin System Integration")
     print("=" * 50)
@@ -22,10 +24,12 @@ async def test_plugin_integration():
             results = await bot.plugin_manager.discover_and_load_plugins(bot.plugin_adapter)
             print(f"✅ Plugin loading results: {results}")
             
-            status = bot.plugin_manager.get_plugin_status()
+            status = await bot.plugin_manager.get_plugin_status()
             print(f"✅ Loaded plugins: {list(status['loaded'].keys())}")
             if status['failed']:
                 print(f"⚠️  Failed plugins: {list(status['failed'].keys())}")
+            else:
+                print("✅ No failed plugins!")
         else:
             print("❌ Plugin system not initialized")
             return

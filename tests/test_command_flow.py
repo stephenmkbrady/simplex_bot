@@ -7,10 +7,12 @@ import asyncio
 import json
 import sys
 import os
+import pytest
 
 # Add the current directory to Python path so we can import bot modules
 sys.path.insert(0, '/app')
 
+@pytest.mark.asyncio
 async def test_contacts_command_flow():
     """Test the complete flow from command to response"""
     try:

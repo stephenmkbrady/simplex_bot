@@ -22,11 +22,12 @@ class TestMessageHandler:
         self.message_logger = logging.getLogger('test_messages')
         
         # Mock dependencies
-        self.command_registry = CommandRegistry(self.logger)
+        self.admin_manager = AdminManager(logger=self.logger)
+        self.command_registry = CommandRegistry(self.logger, self.admin_manager)
         self.file_download_manager = MagicMock(spec=FileDownloadManager)
         self.send_message_callback = AsyncMock()
         
-        # Create message handler
+        # Create message handler - note: constructor may have changed for universal architecture
         self.message_handler = MessageHandler(
             command_registry=self.command_registry,
             file_download_manager=self.file_download_manager,
@@ -34,6 +35,12 @@ class TestMessageHandler:
             logger=self.logger,
             message_logger=self.message_logger
         )
+        
+        # Mock bot instance for plugin manager integration
+        self.mock_bot = MagicMock()
+        self.mock_plugin_manager = MagicMock()
+        self.mock_bot.plugin_manager = self.mock_plugin_manager
+        self.message_handler._bot_instance = self.mock_bot
     
     @pytest.mark.asyncio
     async def test_process_text_message(self):

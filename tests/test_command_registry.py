@@ -26,7 +26,7 @@ class TestCommandRegistry:
         assert len(self.command_registry.commands) > 0
         
         # Check that only core command is registered (others moved to plugins)
-        core_commands = ['info']
+        core_commands = ['help']
         for cmd in core_commands:
             assert cmd in self.command_registry.commands
             assert callable(self.command_registry.commands[cmd])
@@ -44,8 +44,8 @@ class TestCommandRegistry:
     def test_get_command(self):
         """Test command retrieval"""
         # Get existing command
-        info_command = self.command_registry.get_command('info')
-        assert callable(info_command)
+        help_command = self.command_registry.get_command('help')
+        assert callable(help_command)
         
         # Get non-existent command
         assert self.command_registry.get_command('nonexistent') is None
@@ -56,42 +56,42 @@ class TestCommandRegistry:
         
         assert isinstance(commands, list)
         assert len(commands) > 0
-        assert 'info' in commands
+        assert 'help' in commands
     
     def test_is_command(self):
         """Test command detection"""
         # Valid commands - is_command now accepts any ! command and checks plugins later
-        assert self.command_registry.is_command('!info') == True
-        assert self.command_registry.is_command('!help') == True  # Plugin commands also accepted
-        assert self.command_registry.is_command('!status') == True
+        assert self.command_registry.is_command('!help') == True  # Core command
+        assert self.command_registry.is_command('!status') == True  # Plugin commands also accepted
         assert self.command_registry.is_command('!ping') == True
         assert self.command_registry.is_command('!stats') == True
+        assert self.command_registry.is_command('!plugins') == True
         
         # Invalid commands
         assert self.command_registry.is_command('!nonexistent') == True  # Still valid format
-        assert self.command_registry.is_command('info') == False  # Missing !
+        assert self.command_registry.is_command('help') == False  # Missing !
         assert self.command_registry.is_command('hello world') == False
         assert self.command_registry.is_command('') == False
         assert self.command_registry.is_command('!') == False  # Empty command
         
         # Edge cases
-        assert self.command_registry.is_command('!info extra args') == True  # Should still detect info
-        assert self.command_registry.is_command('  !info  ') == True  # Should handle whitespace
+        assert self.command_registry.is_command('!help extra args') == True  # Should still detect help
+        assert self.command_registry.is_command('  !help  ') == True  # Should handle whitespace
     
     @pytest.mark.asyncio
-    async def test_execute_command_info(self):
-        """Test info command execution"""
-        result = await self.command_registry.execute_command('!info', 'TestUser')
+    async def test_execute_command_help(self):
+        """Test help command execution"""
+        result = await self.command_registry.execute_command('!help', 'TestUser')
         
         assert result is not None
         assert isinstance(result, str)
-        assert 'info' in result.lower() or 'bot' in result.lower()
+        assert 'help' in result.lower() or 'bot' in result.lower()
     
     @pytest.mark.asyncio
     async def test_execute_command_moved_to_plugin(self):
         """Test that commands moved to plugins return unknown command when no plugin manager"""
         # These commands were moved to plugins and should return unknown when no plugin manager
-        for cmd in ['!help', '!status', '!ping', '!stats']:
+        for cmd in ['!status', '!ping', '!stats', '!plugins']:
             result = await self.command_registry.execute_command(cmd, 'TestUser')
             assert result is not None
             assert isinstance(result, str)
@@ -102,12 +102,12 @@ class TestCommandRegistry:
     @pytest.mark.asyncio
     async def test_execute_command_with_args(self):
         """Test command execution with arguments"""
-        result = await self.command_registry.execute_command('!info extra args', 'TestUser')
+        result = await self.command_registry.execute_command('!help extra args', 'TestUser')
         
         assert result is not None
         assert isinstance(result, str)
-        # Should still execute info command even with extra args
-        assert 'info' in result.lower() or 'bot' in result.lower()
+        # Should still execute help command even with extra args
+        assert 'help' in result.lower() or 'bot' in result.lower()
     
     @pytest.mark.asyncio
     async def test_execute_command_nonexistent(self):
@@ -185,14 +185,14 @@ class TestCommandRegistryIntegration:
         async def mock_send_callback(contact, message):
             callback_calls.append((contact, message))
         
-        # Execute info command with real callback
-        info_handler = command_registry.get_command('info')
-        await info_handler([], 'TestUser', mock_send_callback)
+        # Execute help command with real callback
+        help_handler = command_registry.get_command('help')
+        await help_handler([], 'TestUser', mock_send_callback)
         
         # Verify callback was called
         assert len(callback_calls) == 1
         assert callback_calls[0][0] == 'TestUser'
-        assert len(callback_calls[0][1]) > 0  # Should return some info
+        assert len(callback_calls[0][1]) > 0  # Should return some help
     
     def test_command_parsing_edge_cases(self):
         """Test command parsing edge cases"""
@@ -203,21 +203,21 @@ class TestCommandRegistryIntegration:
         
         # Test various command formats
         test_cases = [
-            ('!info', True),
-            ('!INFO', True),        # Valid command format
-            ('!!info', True),       # Double exclamation - treated as valid (!info after first !)
-            ('!info!', True),       # Should still detect info
-            ('!info_test', True),   # Valid command format
-            ('!info-test', True),   # Valid command format  
-            ('!info123', True),     # Valid command format
-            ('!info ', True),       # Trailing space
-            (' !info', True),       # Leading space
-            ('!info\n', True),      # Newline
-            ('!info\t', True),      # Tab
-            ('!help', True),        # Valid command format (plugin will handle)
+            ('!help', True),
+            ('!HELP', True),        # Valid command format
+            ('!!help', True),       # Double exclamation - treated as valid (!help after first !)
+            ('!help!', True),       # Should still detect help
+            ('!help_test', True),   # Valid command format
+            ('!help-test', True),   # Valid command format  
+            ('!help123', True),     # Valid command format
+            ('!help ', True),       # Trailing space
+            (' !help', True),       # Leading space
+            ('!help\n', True),      # Newline
+            ('!help\t', True),      # Tab
             ('!status', True),      # Valid command format (plugin will handle)
             ('!ping', True),        # Valid command format (plugin will handle)
             ('!stats', True),       # Valid command format (plugin will handle)
+            ('!plugins', True),     # Valid command format (plugin will handle)
         ]
         
         for command_text, expected in test_cases:
