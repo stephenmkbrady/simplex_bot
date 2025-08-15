@@ -11,6 +11,7 @@ from datetime import datetime
 
 from file_download_manager import FileDownloadManager
 from message_context import MessageContext
+from background_task_processor import BackgroundTaskProcessor
 
 
 class MessageHandler:
@@ -22,7 +23,8 @@ class MessageHandler:
                  send_message_callback: Callable,
                  logger: logging.Logger,
                  message_logger: logging.Logger,
-                 startup_timestamp: float = None):
+                 startup_timestamp: float = None,
+                 enable_parallel_processing: bool = True):
         self.command_registry = command_registry
         self.file_download_manager = file_download_manager
         self.send_message_callback = send_message_callback
@@ -30,10 +32,32 @@ class MessageHandler:
         self.message_logger = message_logger
         self.startup_timestamp = startup_timestamp or 0
         
-        # Removed contact ID resolver - using simple contact_name approach
+        # Background task processing for parallel command execution
+        self.enable_parallel_processing = enable_parallel_processing
+        if self.enable_parallel_processing:
+            self.background_processor = BackgroundTaskProcessor(
+                send_message_callback=self._send_message_wrapper,
+                default_timeout=300,  # 5 minutes default
+                max_concurrent_tasks=50
+            )
+            self.logger.info("🔄 Parallel command processing enabled")
+        else:
+            self.background_processor = None
+            self.logger.info("⏸️ Sequential command processing (legacy mode)")
         
         # Constants
         self.MESSAGE_PREVIEW_LENGTH = 100
+    
+    async def _send_message_wrapper(self, chat_id: str, message: str):
+        """Wrapper for send_message_callback to work with background processor"""
+        try:
+            # Determine if this is a group message based on chat_id format
+            is_group = chat_id != chat_id.lower() and not chat_id.startswith('@')
+            await self.send_message_callback(chat_id, message, is_group=is_group)
+        except Exception as e:
+            self.logger.error(f"Error sending message via wrapper: {e}")
+            # Fallback to direct call
+            await self.send_message_callback(chat_id, message)
     
     def _is_message_too_old(self, message_data: Dict[str, Any]) -> bool:
         """Check if message timestamp is older than bot startup time"""
@@ -205,7 +229,94 @@ class MessageHandler:
             await self._process_non_command_message(context.contact_name, text, message_data)
     
     async def _process_command(self, contact_name: str, text: str, message_data: Dict[str, Any]) -> None:
-        """Process a command message"""
+        """Process a command message with optional parallel processing"""
+        try:
+            # Parse command for routing decision
+            if not self.command_registry.is_command(text):
+                return
+                
+            command_text = text[1:]  # Remove ! prefix
+            parts = command_text.split()
+            command_name = parts[0] if parts else ""
+            
+            # Determine chat routing
+            chat_id = self._determine_chat_routing(message_data, contact_name)
+            
+            # Check if parallel processing is enabled and if command should use it
+            if self.enable_parallel_processing and self.background_processor and self._should_use_parallel_processing(command_name):
+                await self._process_command_parallel(contact_name, text, message_data, command_name, chat_id)
+            else:
+                await self._process_command_sequential(contact_name, text, message_data, chat_id)
+                
+        except Exception as e:
+            self.logger.error(f"Error in command processing: {e}")
+            error_msg = f"Error processing command"
+            await self.send_routed_message(message_data, contact_name, error_msg)
+    
+    def _should_use_parallel_processing(self, command_name: str) -> bool:
+        """Determine if a command should use parallel processing"""
+        # Commands that should stay sequential (for now)
+        sequential_commands = {
+            "help",      # Quick response, no need for background
+            "ping",      # Quick response, no need for background
+            "status",    # May need to check background processor status
+            "reload",    # Critical system operation
+            "enable",    # Critical system operation
+            "disable",   # Critical system operation
+        }
+        
+        return command_name not in sequential_commands
+    
+    async def _process_command_parallel(self, contact_name: str, text: str, message_data: Dict[str, Any], command_name: str, chat_id: str):
+        """Process command using background task processor"""
+        try:
+            # Create CommandContext for the command
+            from plugins.universal_plugin_base import CommandContext, BotPlatform
+            
+            # Parse command and arguments
+            command_text = text[1:]  # Remove ! prefix
+            parts = command_text.split()
+            args = parts[1:] if len(parts) > 1 else []
+            args_raw = ' '.join(args) if args else ''
+            
+            context = CommandContext(
+                command=command_name,
+                args=args,
+                args_raw=args_raw,
+                user_id=contact_name,
+                chat_id=chat_id,
+                user_display_name=contact_name,
+                platform=BotPlatform.SIMPLEX,
+                raw_message=message_data
+            )
+            
+            # Create command handler function
+            async def command_handler(ctx: CommandContext) -> str:
+                # Get plugin manager from the bot instance
+                plugin_manager = None
+                if hasattr(self, '_bot_instance'):
+                    plugin_manager = getattr(self._bot_instance, 'plugin_manager', None)
+                
+                # Execute the command using the command registry
+                result = await self.command_registry.execute_command(text, contact_name, plugin_manager, message_data)
+                return result or "Command completed successfully."
+            
+            # Submit to background processor
+            await self.background_processor.submit_command(
+                context=context,
+                plugin_name="unknown",  # Will be determined by command registry
+                command_handler=command_handler
+            )
+            
+            self.logger.info(f"📤 Command '{command_name}' submitted for parallel processing")
+            
+        except Exception as e:
+            self.logger.error(f"Error in parallel command processing: {e}")
+            # Fallback to sequential processing
+            await self._process_command_sequential(contact_name, text, message_data, chat_id)
+    
+    async def _process_command_sequential(self, contact_name: str, text: str, message_data: Dict[str, Any], chat_id: str):
+        """Process command using original sequential method"""
         try:
             # Try to get plugin manager from the bot instance
             plugin_manager = None
@@ -214,13 +325,11 @@ class MessageHandler:
             
             result = await self.command_registry.execute_command(text, contact_name, plugin_manager, message_data)
             if result:
-                # Use common routing logic
-                chat_id = self._determine_chat_routing(message_data, contact_name)
                 is_group = self._is_group_message(message_data)
                 await self.send_message_callback(chat_id, result, is_group=is_group)
                 self.message_logger.info(f"TO {chat_id}: {result[:self.MESSAGE_PREVIEW_LENGTH]}...")
         except Exception as e:
-            self.logger.error(f"Error executing command: {e}")
+            self.logger.error(f"Error executing command sequentially: {e}")
             error_msg = f"Error processing command"
             await self.send_routed_message(message_data, contact_name, error_msg)
     

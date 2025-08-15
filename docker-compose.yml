@@ -22,6 +22,7 @@ services:
       - ./xftp_client.py:/app/xftp_client.py:ro
       - ./admin_manager.py:/app/admin_manager.py:ro
       - ./invite_manager.py:/app/invite_manager.py:ro
+      - ./background_task_processor.py:/app/background_task_processor.py:ro
       
       # Configuration files
       - ./admin_config.yml:/app/admin_config.yml
