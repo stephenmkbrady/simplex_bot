@@ -414,6 +414,12 @@ class SimplexChatBot:
     """Main bot orchestrator using dependency injection"""
     
     def __init__(self, config_path: str = "config.yml", cli_args: Optional[argparse.Namespace] = None):
+        # Record startup time to ignore old messages
+        import time
+        self.startup_timestamp = time.time()
+        
+        # We'll log this after logger is initialized
+        
         # Load configuration
         self.cli_args = cli_args
         self.config_manager = ConfigManager(config_path)
@@ -427,6 +433,11 @@ class SimplexChatBot:
         )
         self.logger = self.logger_manager.app_logger
         self.message_logger = self.logger_manager.message_logger
+        
+        # Log startup timestamp
+        from datetime import datetime
+        startup_time_str = datetime.fromtimestamp(self.startup_timestamp).strftime('%Y-%m-%d %H:%M:%S')
+        self.logger.info(f"🕐 BOT STARTUP: Bot started at {startup_time_str} (timestamp: {self.startup_timestamp})")
         
         # Initialize admin manager
         self.admin_manager = AdminManager(logger=self.logger)
@@ -493,7 +504,8 @@ class SimplexChatBot:
             file_download_manager=self.file_download_manager,
             send_message_callback=self.websocket_manager.send_message,
             logger=self.logger,
-            message_logger=self.message_logger
+            message_logger=self.message_logger,
+            startup_timestamp=self.startup_timestamp
         )
         
         # Pass bot instance to message handler and command registry for plugin access

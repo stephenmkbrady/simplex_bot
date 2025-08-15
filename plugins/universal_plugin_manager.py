@@ -20,6 +20,18 @@ import logging
 
 from .universal_plugin_base import UniversalBotPlugin, ContainerizedBotPlugin, BotAdapter, CommandContext
 
+# Import platform services
+try:
+    import sys
+    import os
+    # Add parent directory to path for imports
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from platform_services import PlatformServiceRegistry
+    from plugins.external.simplex.services import SimpleXPlatformServices
+except ImportError:
+    PlatformServiceRegistry = None
+    SimpleXPlatformServices = None
+
 
 class UniversalPluginFileHandler(FileSystemEventHandler):
     """File system event handler for plugin hot reloading"""
@@ -112,10 +124,53 @@ class UniversalPluginManager:
         self.module_cache: Dict[str, any] = {}
         self.logger = logger if logger else logging.getLogger("universal_plugin_manager")
         
+        # Platform service registry
+        self.service_registry: Optional['PlatformServiceRegistry'] = None
+        if PlatformServiceRegistry:
+            self.service_registry = PlatformServiceRegistry(logger=self.logger)
+        
         # Ensure plugins directory exists
         self.plugins_dir.mkdir(exist_ok=True)
         
         self.logger.debug(f"🔌 Universal plugin manager initialized for directory: {self.plugins_dir}")
+    
+    async def initialize_platform_services(self, adapter: BotAdapter):
+        """Initialize platform-specific services based on the adapter"""
+        if not self.service_registry:
+            self.logger.warning("🔧 SERVICE REGISTRY: Platform service registry not available")
+            return
+        
+        # Import and initialize platform services based on adapter type
+        try:
+            if hasattr(adapter, 'platform'):
+                platform = adapter.platform
+                self.logger.info(f"🔧 SERVICE REGISTRY: Initializing services for platform: {platform}")
+                
+                # Initialize SimpleX services if this is a SimpleX platform
+                if (platform.value == "simplex" and SimpleXPlatformServices and 
+                    hasattr(adapter, 'bot') and adapter.bot):
+                    
+                    self.logger.info("🔧 SERVICE REGISTRY: Registering SimpleX platform services")
+                    simplex_services = SimpleXPlatformServices(adapter.bot, self.logger)
+                    simplex_services.register_all_services(self.service_registry)
+                    
+                    # Store reference for message history integration
+                    self.simplex_services = simplex_services
+                    
+                elif platform.value == "matrix":
+                    self.logger.info("🔧 SERVICE REGISTRY: Matrix services not implemented yet")
+                    
+                elif platform.value == "discord":
+                    self.logger.info("🔧 SERVICE REGISTRY: Discord services not implemented yet")
+                    
+                else:
+                    self.logger.warning(f"🔧 SERVICE REGISTRY: Unknown platform: {platform}")
+                
+            else:
+                self.logger.warning("🔧 SERVICE REGISTRY: Adapter does not specify platform")
+                
+        except Exception as e:
+            self.logger.error(f"🔧 SERVICE REGISTRY: Error initializing platform services: {e}")
         
     def load_plugin_config(self) -> Dict[str, Dict[str, any]]:
         """Load plugin configuration from plugin.yml"""
@@ -281,6 +336,10 @@ class UniversalPluginManager:
     async def discover_and_load_plugins(self, adapter: BotAdapter) -> Dict[str, bool]:
         """Automatically discover and load all plugins from plugins directory"""
         self.adapter = adapter
+        
+        # Initialize platform services first
+        await self.initialize_platform_services(adapter)
+        
         results = {}
         
         # Load plugin configuration
@@ -375,8 +434,8 @@ class UniversalPluginManager:
                 self.logger.warning(f"Plugin {plugin.name} does not support platform {self.adapter.platform.value}")
                 return False
             
-            # Initialize plugin with adapter (containers are auto-started in ContainerizedBotPlugin)
-            if await plugin.initialize(self.adapter):
+            # Initialize plugin with adapter and platform services
+            if await plugin.initialize(self.adapter, self.service_registry):
                 # Cleanup old plugin if reloading
                 if plugin.name in self.plugins:
                     old_plugin = self.plugins[plugin.name]
@@ -455,6 +514,50 @@ class UniversalPluginManager:
             self.logger.debug(f"⏸️ Disabled plugin: {plugin_name}")
             return True
         return False
+
+    async def handle_message(self, context: CommandContext) -> Optional[str]:
+        """Handle both commands and regular messages, broadcasting to all plugins"""
+        self.logger.info(f"📢 PLUGIN MANAGER: handle_message called with: '{context.args_raw}' from {context.user_display_name}")
+        if not self.plugins:
+            self.logger.warning(f"📢 PLUGIN MANAGER: No plugins loaded!")
+            return None
+        
+        # Store message in history service if available (for non-command messages)
+        if not context.args_raw.startswith('!') and hasattr(self, 'simplex_services'):
+            try:
+                message_service = self.simplex_services.get_message_history_service()
+                message_data = {
+                    'sender': context.user_display_name,
+                    'content': context.args_raw,
+                    'type': 'text',
+                    'user_id': context.user_id,
+                    'raw_message': context.raw_message
+                }
+                message_service.store_message(context.chat_id, message_data)
+            except Exception as e:
+                self.logger.error(f"Error storing message in history: {e}")
+        
+        # Let all plugins process the message for context/history (non-command messages)
+        if not context.args_raw.startswith('!'):
+            self.logger.info(f"📢 PLUGIN MANAGER: Broadcasting non-command message to {len(self.plugins)} plugins")
+            for plugin_name, plugin in self.plugins.items():
+                if plugin.enabled:
+                    self.logger.info(f"📢 PLUGIN MANAGER: Calling handle_message on {plugin_name}")
+                    try:
+                        await plugin.handle_message(context)
+                        self.logger.info(f"📢 PLUGIN MANAGER: {plugin_name} handle_message completed")
+                    except Exception as e:
+                        self.logger.error(f"Plugin {plugin_name} message handling error: {e}")
+                else:
+                    self.logger.info(f"📢 PLUGIN MANAGER: Skipping disabled plugin {plugin_name}")
+        else:
+            self.logger.info(f"📢 PLUGIN MANAGER: Skipping command message broadcast (starts with !)")
+        
+        # Then handle commands if this is a command message
+        if context.args_raw.startswith('!'):
+            return await self.handle_command(context)
+        
+        return None
 
     async def handle_command(self, context: CommandContext) -> Optional[str]:
         """Try to handle command with available plugins"""

@@ -16,6 +16,18 @@ import aiohttp
 import logging
 from pathlib import Path
 
+# Import platform services (will be available after creation)
+try:
+    import sys
+    import os
+    # Add parent directory to path for imports
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from platform_services import PlatformServiceRegistry, PlatformService
+except ImportError:
+    # Fallback for backward compatibility
+    PlatformServiceRegistry = None
+    PlatformService = None
+
 
 class BotPlatform(Enum):
     """Supported bot platforms"""
@@ -95,6 +107,7 @@ class UniversalBotPlugin(ABC):
         self.adapter: Optional[BotAdapter] = None
         self.logger = logger
         self.supported_platforms = [BotPlatform.MATRIX, BotPlatform.SIMPLEX]  # Override in subclasses
+        self.platform_services: Optional['PlatformServiceRegistry'] = None
     
     @abstractmethod
     def get_commands(self) -> List[str]:
@@ -106,14 +119,20 @@ class UniversalBotPlugin(ABC):
         """Handle a command and return response or None"""
         pass
     
-    async def initialize(self, adapter: BotAdapter) -> bool:
-        """Initialize plugin with bot adapter. Return True if successful."""
+    async def initialize(self, adapter: BotAdapter, services: Optional['PlatformServiceRegistry'] = None) -> bool:
+        """Initialize plugin with bot adapter and platform services. Return True if successful."""
         self.adapter = adapter
+        self.platform_services = services
         
         # Check if this plugin supports the current platform
-        if adapter.platform not in self.supported_platforms:
+        if not self.supports_platform(adapter.platform):
             return False
         
+        # Call plugin-specific initialization
+        return await self._on_initialize()
+    
+    async def _on_initialize(self) -> bool:
+        """Plugin-specific initialization hook. Override in subclasses."""
         return True
     
     async def cleanup(self):
@@ -126,6 +145,9 @@ class UniversalBotPlugin(ABC):
     
     def supports_platform(self, platform: BotPlatform) -> bool:
         """Check if plugin supports a specific platform"""
+        # Empty supported_platforms list means universal (supports all platforms)
+        if not self.supported_platforms:
+            return True
         return platform in self.supported_platforms
     
     def get_info(self) -> Dict[str, Any]:
@@ -167,6 +189,29 @@ class UniversalBotPlugin(ABC):
         """Download a file using the bot adapter"""
         if self.adapter:
             return await self.adapter.download_file(file_info)
+        return None
+    
+    # Platform service access methods
+    def require_service(self, service_name: str) -> Optional['PlatformService']:
+        """Get required platform service or None if unavailable"""
+        if not self.platform_services:
+            return None
+        return self.platform_services.get_service(service_name)
+    
+    def get_available_services(self) -> List[str]:
+        """Get list of available platform services"""
+        if not self.platform_services:
+            return []
+        return self.platform_services.list_available_services()
+    
+    async def check_service_availability(self, service_name: str) -> bool:
+        """Check if a service is both registered and available"""
+        if not self.platform_services:
+            return False
+        return await self.platform_services.check_service_availability(service_name)
+    
+    async def handle_message(self, context: CommandContext) -> Optional[str]:
+        """Handle non-command messages (optional override for plugins that need message flow access)"""
         return None
 
 
@@ -361,10 +406,10 @@ class ContainerizedBotPlugin(UniversalBotPlugin):
                 "last_check": asyncio.get_event_loop().time()
             }
     
-    async def initialize(self, adapter: BotAdapter) -> bool:
+    async def initialize(self, adapter: BotAdapter, services: Optional['PlatformServiceRegistry'] = None) -> bool:
         """Initialize plugin with automatic container startup"""
         # Call parent initialization
-        if not await super().initialize(adapter):
+        if not await super().initialize(adapter, services):
             return False
         
         # Start containers if they exist

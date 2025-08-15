@@ -21,17 +21,66 @@ class MessageHandler:
                  file_download_manager: FileDownloadManager,
                  send_message_callback: Callable,
                  logger: logging.Logger,
-                 message_logger: logging.Logger):
+                 message_logger: logging.Logger,
+                 startup_timestamp: float = None):
         self.command_registry = command_registry
         self.file_download_manager = file_download_manager
         self.send_message_callback = send_message_callback
         self.logger = logger
         self.message_logger = message_logger
+        self.startup_timestamp = startup_timestamp or 0
         
         # Removed contact ID resolver - using simple contact_name approach
         
         # Constants
         self.MESSAGE_PREVIEW_LENGTH = 100
+    
+    def _is_message_too_old(self, message_data: Dict[str, Any]) -> bool:
+        """Check if message timestamp is older than bot startup time"""
+        if not self.startup_timestamp:
+            return False
+            
+        try:
+            # Try to extract timestamp from different message structures
+            message_ts = None
+            
+            # Check for newChatItems structure
+            if "chatItems" in message_data:
+                chat_items = message_data["chatItems"]
+                if chat_items and len(chat_items) > 0:
+                    chat_item = chat_items[0]
+                    if "chatItem" in chat_item:
+                        item_data = chat_item["chatItem"]
+                        # Look for timestamp fields - common SimpleX timestamp fields
+                        message_ts = (item_data.get("ts") or 
+                                    item_data.get("timestamp") or 
+                                    item_data.get("sentAt") or
+                                    item_data.get("receivedAt"))
+            
+            # Check for direct chatItem structure  
+            elif "chatItem" in message_data:
+                chat_item = message_data["chatItem"]
+                message_ts = (chat_item.get("ts") or 
+                            chat_item.get("timestamp") or 
+                            chat_item.get("sentAt") or
+                            chat_item.get("receivedAt"))
+            
+            if message_ts:
+                # Convert timestamp to seconds if it's in milliseconds
+                if message_ts > 1e12:  # Likely milliseconds
+                    message_ts = message_ts / 1000
+                
+                # Compare with startup timestamp
+                is_old = message_ts < self.startup_timestamp
+                if is_old:
+                    self.logger.info(f"🕐 OLD MESSAGE: Message ts={message_ts}, startup ts={self.startup_timestamp}")
+                return is_old
+                
+        except Exception as e:
+            self.logger.debug(f"🕐 TIMESTAMP: Error checking message timestamp: {e}")
+            
+        # If we can't determine timestamp, process the message (fail-safe)
+        return False
     
     def _get_message_context(self, message_data: Dict[str, Any]) -> MessageContext:
         """Get unified message context using MessageContext class"""
@@ -105,6 +154,11 @@ class MessageHandler:
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """Process an incoming message and handle commands"""
         try:
+            # Check if message is older than bot startup time
+            if self._is_message_too_old(message_data):
+                self.logger.debug(f"🕐 IGNORING: Message older than bot startup time")
+                return
+            
             # Use unified message context for all parsing
             context = self._get_message_context(message_data)
             
@@ -146,6 +200,9 @@ class MessageHandler:
         # Check if it's a command
         if self.command_registry.is_command(text):
             await self._process_command(context.contact_name, text, message_data)
+        else:
+            # Handle non-command messages by passing to plugin manager
+            await self._process_non_command_message(context.contact_name, text, message_data)
     
     async def _process_command(self, contact_name: str, text: str, message_data: Dict[str, Any]) -> None:
         """Process a command message"""
@@ -166,6 +223,39 @@ class MessageHandler:
             self.logger.error(f"Error executing command: {e}")
             error_msg = f"Error processing command"
             await self.send_routed_message(message_data, contact_name, error_msg)
+    
+    async def _process_non_command_message(self, contact_name: str, text: str, message_data: Dict[str, Any]) -> None:
+        """Process non-command messages by forwarding to plugin manager"""
+        try:
+            # Get plugin manager from the bot instance
+            if hasattr(self, '_bot_instance') and hasattr(self._bot_instance, 'plugin_manager'):
+                plugin_manager = self._bot_instance.plugin_manager
+                
+                # Create CommandContext for the non-command message
+                from plugins.universal_plugin_base import CommandContext, BotPlatform
+                
+                # Determine chat routing
+                chat_id = self._determine_chat_routing(message_data, contact_name)
+                
+                context = CommandContext(
+                    command="",  # Empty for non-command messages
+                    args=[],
+                    args_raw=text,  # Full message text
+                    user_id=contact_name,
+                    chat_id=chat_id,
+                    user_display_name=contact_name,
+                    platform=BotPlatform.SIMPLEX,
+                    raw_message=message_data
+                )
+                
+                # Let plugin manager handle the message (will broadcast to all plugins)
+                await plugin_manager.handle_message(context)
+                self.logger.debug(f"Non-command message forwarded to plugin manager: '{text[:50]}...'")
+            else:
+                self.logger.warning("Plugin manager not available for non-command message processing")
+                
+        except Exception as e:
+            self.logger.error(f"Error processing non-command message: {e}")
     
     async def _handle_voice_message(self, contact_name: str, content: Dict[str, Any], chat_context: str, message_data: Dict[str, Any]) -> None:
         """Handle voice messages with STT integration"""
@@ -654,18 +744,24 @@ class MessageHandler:
             
             self.logger.info(f"🎤 STT: Audio file {filename} downloaded, triggering STT processing")
             
-            # Check if we have a plugin manager with STT plugin
+            # Check if we have a plugin manager with audio processing service
             if hasattr(self, '_bot_instance') and hasattr(self._bot_instance, 'plugin_manager'):
                 plugin_manager = self._bot_instance.plugin_manager
                 
-                # Look for STT plugin
-                stt_plugin = None
-                for plugin in plugin_manager.plugins.values():
-                    if hasattr(plugin, 'handle_downloaded_audio') and plugin.name == 'stt_openai':
-                        stt_plugin = plugin
-                        break
+                # Look for audio processing service first (preferred)
+                audio_service = None
+                if hasattr(plugin_manager, 'service_registry') and plugin_manager.service_registry:
+                    audio_service = plugin_manager.service_registry.get_service('audio_processing')
                 
-                if stt_plugin:
+                # Fall back to direct plugin access for compatibility
+                stt_plugin = None
+                if not audio_service:
+                    for plugin in plugin_manager.plugins.values():
+                        if hasattr(plugin, 'handle_downloaded_audio') and plugin.enabled:
+                            stt_plugin = plugin
+                            break
+                
+                if audio_service or stt_plugin:
                     self.logger.debug(f"🎤 STT: Found STT plugin, processing downloaded audio file: {filename}")
                     
                     # Create context for the STT plugin based on XFTP event data
@@ -693,9 +789,22 @@ class MessageHandler:
                         raw_message=xftp_data
                     )
                     
-                    # Process the downloaded audio file with STT plugin
-                    # The STT plugin expects: handle_downloaded_audio(filename, file_path, user_name, chat_id, message_data)
-                    result = await stt_plugin.handle_downloaded_audio(filename, file_path, contact_name, chat_id, xftp_data)
+                    # Process the downloaded audio file
+                    result = None
+                    if audio_service:
+                        # Use audio processing service (preferred)
+                        self.logger.debug(f"🎤 STT: Using audio processing service")
+                        process_context = {
+                            'user_name': contact_name,
+                            'chat_id': chat_id,
+                            'filename': filename,
+                            'message_data': xftp_data
+                        }
+                        result = await audio_service.process_audio_file(file_path, process_context)
+                    else:
+                        # Fall back to direct plugin access
+                        self.logger.debug(f"🎤 STT: Using direct plugin access")
+                        result = await stt_plugin.handle_downloaded_audio(filename, file_path, contact_name, chat_id, xftp_data)
                     
                     if result:
                         self.logger.info(f"🎤 STT: Transcription completed for {filename}")

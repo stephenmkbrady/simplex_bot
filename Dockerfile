@@ -55,10 +55,17 @@ COPY xftp_client.py .
 COPY file_download_manager.py .
 COPY message_handler.py .
 COPY websocket_manager.py .
-COPY connect_invitation.sh .
 COPY check_connection.sh .
 COPY websocket_connect.py .
 COPY connect.sh .
+
+# Copy platform service architecture files
+COPY platform_services.py .
+
+# Copy additional bot modules
+COPY admin_manager.py .
+COPY invite_manager.py .
+COPY message_context.py .
 
 # Create a non-root user and add to docker group
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
@@ -77,7 +84,7 @@ RUN mkdir -p /app/.cache/ms-playwright && \
     chown -R 1000:1001 /app/.cache
 
 # Make scripts executable
-RUN chmod +x connect_invitation.sh check_connection.sh connect.sh
+RUN chmod +x check_connection.sh connect.sh
 
 # Run the bot (user will be set via docker-compose)
 CMD ["python", "bot.py"]
